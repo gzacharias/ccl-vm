@@ -1,0 +1,194 @@
+(in-package :ccl-vm)
+
+;;; This must match cvm-arch.  Figure out some way to share
+
+;; A lot of the front end of the compiler, and some random ccl code, assumes a certain basic
+;; architecture in terms of what types have their own tags, etc. so stick close to that.
+
+(defconstant fulltag-even-fixnum 0)
+(defconstant fulltag-single-float 1)
+(defconstant fulltag-character 2)
+(defconstant fulltag-cons 3)
+(defconstant fulltag-nil 11)
+(defconstant fulltag-immediate 4) ;; was tra-0, reuse it...
+(defconstant fulltag-odd-fixnum 8)
+;; 12 is available (was tra-1)
+(defconstant fulltag-misc 13)
+(defconstant fulltag-symbol 14)
+(defconstant fulltag-function 15)
+
+(defconstant lisptag-fixnum 0)
+(defconstant lisptag-single-float 1)
+(defconstant lisptag-character 2)
+(defconstant lisptag-list 3)
+(defconstant lisptag-immediate 4)
+(defconstant lisptag-misc 5)
+(defconstant lisptag-symbol 6)
+(defconstant lisptag-function 7)
+
+;; Pass 1 of the compiler assumes this, so we have no choice.  See *nx-64-bit-fixnum-type*
+(defconstant num-fixnum-bits 61)
+(defconstant fixnum-shift (- 64  num-fixnum-bits))
+(defconstant full-fixnum-mask (lognot (ash -1 num-fixnum-bits))) ;;  with sign bit, not a fixnum
+(defconstant unsigned-fixnum-mask (ash full-fixnum-mask -1)) ;; without sign bit, just the data
+
+(defconstant IEEE-single-float-digits 24)
+(defconstant IEEE-double-float-digits 53)
+;; We want to be able to represent single floats as native single floats
+(assert (>= (float-digits 1.0s0) IEEE-single-float-digits))
+
+
+
+;; These values never occur as fulltags, so can be used for misc vector subtags without confusion
+(defconstant gvector-subtags-0 5)
+(defconstant gvector-subtags-1 6)
+(defconstant ivector-subtags-misc 7)
+(defconstant ivector-subtags-32-bit 9)
+(defconstant ivector-subtags-64-bit 10)
+
+;; Define all the subtags from x86, but we won't be using them all!
+(defparameter *uvector-subtags* nil)
+
+(defmacro subtag-typekey (subtag)
+  `(or (car (rassoc ,subtag *uvector-subtags*)) (error "Unknown subtag")))
+(defmacro typekey-subtag (typekey)
+  `(or (cdr (assoc ,typekey *uvector-subtags*)) (error "Unknown typekey")))
+
+(defun gvector-type-p (subtag-or-typekey)
+  (let* ((subtag (if (fixnump subtag-or-typekey)
+                   subtag-or-typekey
+                   (typekey-subtag subtag-or-typekey)))
+         (tag (logand subtag #xF)))
+    (or (eq tag gvector-subtags-0) (eq tag gvector-subtags-1))))
+
+(defun ivector-type-p (subtag-or-typekey)
+  (let* ((subtag (if (fixnump subtag-or-typekey)
+                   subtag-or-typekey
+                   (typekey-subtag subtag-or-typekey)))
+         (tag (logand subtag #xF)))
+    (or (eq tag ivector-subtags-misc)
+        (eq tag ivector-subtags-32-bit)
+        (eq tag ivector-subtags-64-bit))))
+
+
+#+hemlock (hemlock::defindent "define-subtags" 1)
+(defmacro define-subtags (code &rest names)
+  `(progn
+     ,@(loop for index = #x10 then (+ index #x10)
+         for spec in names
+         as name = (if (consp spec) (car spec) spec)
+         as key = (let ((pname (string name)))
+                    (assert (string= "SUBTAG-" pname :end2 (length "SUBTAG-")))
+                    (intern (subseq pname (length "SUBTAG-")) :keyword))
+         do (when (consp spec)
+              (let ((new-index (ash (cadr spec) 4)))
+                (assert (<= index new-index))
+                (setq index new-index)))
+         do (assert (<= index #xF00))
+         collect `(defconstant ,name (+ ,code ,index))
+         collect `(push (cons ,key ,name) *uvector-subtags*))))
+
+(define-subtags gvector-subtags-0
+  subtag-symbol
+  subtag-catch-frame
+  subtag-hash-vector
+  subtag-pool
+  subtag-population
+  subtag-package
+  subtag-slot-vector
+  subtag-basic-stream
+  subtag-function
+  (subtag-array-header 10))
+
+(define-subtags gvector-subtags-1
+  subtag-ratio
+  subtag-complex
+  subtag-struct
+  subtag-istruct
+  subtag-value-cell
+  subtag-xfunction
+  subtag-lock
+  subtag-instance
+  (subtag-vector-header 10)
+  subtag-simple-vector)
+
+(defconstant min-cl-ivector-subtag #x90) ;; CL ivector subtags start at 9
+
+(define-subtags ivector-subtags-misc
+  ;; common lisp vectors
+  (subtag-complex-double-float-vector 9)
+  subtag-signed-16-bit-vector 
+  subtag-unsigned-16-bit-vector
+  subtag-signed-8-bit-vector
+  subtag-unsigned-8-bit-vector
+  subtag-bit-vector)
+
+(define-subtags ivector-subtags-32-bit
+  subtag-bignum
+  subtag-double-float
+  subtag-xcode-vector
+  subtag-complex-single-float
+  subtag-complex-double-float
+  ;; common lisp vectors
+  (subtag-simple-string 12)
+  subtag-signed-32-bit-vector
+  subtag-unsigned-32-bit-vector
+  subtag-single-float-vector)
+
+(define-subtags ivector-subtags-64-bit
+  subtag-macptr
+  subtag-dead-macptr
+  ;; Common lisp vectors)
+  (subtag-complex-single-float-vector 11)
+  subtag-fixnum-vector
+  subtag-signed-64-bit-vector
+  subtag-unsigned-64-bit-vector
+  subtag-double-float-vector)
+
+
+(defconstant numeric-subtag-mask
+  (logior (ash 1 fulltag-even-fixnum)
+          (ash 1 fulltag-odd-fixnum)
+          (ash 1 subtag-bignum)
+          (ash 1 subtag-ratio)
+          (ash 1 fulltag-single-float)
+          (ash 1 subtag-double-float)
+          (ash 1 subtag-complex)
+          (ash 1 subtag-complex-single-float)
+          (ash 1 subtag-complex-double-float)))
+
+
+;(defconstant $flags_Normal 0)
+;(defconstant $flags_DisposeRecursiveLock 1)
+;(defconstant $flags_DisposPtr 2)
+(defconstant $flags_DisposeRwlock 3)
+;(defconstant $flags_DisposeSemaphore 4)
+
+;(defconstant $system-lock-type-recursive 0)
+;(defconstant $system-lock-type-rwlock 1)
+
+
+;; host symbols are not accessible from the VM, so can use them as unique values.
+(defparameter *unbound-marker* 'unbound-marker)
+(defparameter *slot-unbound-marker* 'slot-unbound-marker)
+(defparameter *illegal-marker* 'illegal-marker)
+
+(defparameter *unbound-function* 'unbound-function)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; random utils
+
+(defun fixnump (x) (typep x 'fixnum))
+
+(declaim (inline require-type))
+(defun require-type (obj type)
+  (assert (typep obj type) (obj))
+  obj)
+
+(defun report-bad-arg (obj type)
+  (error "The value ~s is not of the expected type ~s" obj type))
+
+(defmacro cassert (form)
+  `(unless ,form (cerror "Ignore it" "assert failed ~s" ',form)))
+
+
