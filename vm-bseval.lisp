@@ -580,6 +580,7 @@
 
 (defbseval $bs-with-interrupt-level (level body)
   #+vmthreads `(let ((*interrupt-level* ,level)) ,body)
+  (declare (ignore level))
   body)
 
 (defbseval $bs-unbound-marker () `',*unbound-marker*)

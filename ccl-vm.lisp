@@ -7,14 +7,15 @@
 
 ;; Yes, I'm supposed to use asdf, but it's so damn inflexible for development.
 
-(let ((path (or *load-pathname*
+(let* ((path (or *load-pathname*
                 #+allegro excl:*source-pathname*
                 #+lispworks dspec:*source-pathname*
                 #+sbcl (or *compile-file-truename* *load-truename*)
                 #+ccl ccl:*loading-file-source-file*
-                #+abcl (extensions:source-pathname))))
+                #+abcl (extensions:source-pathname)))
+       (dir (make-pathname :name nil :type nil :defaults path)))
   (setf (logical-pathname-translations "cvm")
-        `((#P"**;*.*" ,(merge-pathnames "**/*.*" (truename path))))))
+        `((#P"**;*.*" ,(merge-pathnames "**/*.*" (truename dir))))))
 
 (defparameter *ccl-vm-files*
   '("cvm:defs.lisp"

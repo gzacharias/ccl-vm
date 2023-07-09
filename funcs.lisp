@@ -112,6 +112,15 @@
 (defun ccl-funcall (sym-or-func &rest args)
   (apply-func-in-environment nil (ensure-func sym-or-func) args))
 
+(defun record-debug-info (name doc-info native-type-sym)
+  (declare (ignore name doc-info native-type-sym))
+  #+NOTYET
+  (let* ((arglist (if (listp doc-info) (cddr doc-info)))
+         (doc (if (listp doc-info) (car doc-info) doc-info)))
+    (record-source-file name native-type-sym)
+    (set-documentation name native-type-sym doc)
+    (when arglist (record-arglist name arglist))))
+
 (%defconstant (ccl '%unbound-function%) *unbound-function*)
 
 ;; called for fasloading and also runtime.  Should be pretty similar to the actual

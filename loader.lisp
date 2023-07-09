@@ -100,13 +100,11 @@
 
 (defun $fasl-defmacro (fn doc)
   (fasl-trace "~s ~s ~s" '$fasl-defmacro fn doc)
-  ;; (cadr doc) is position '&body in arglist, for defindent...
-  (let ((arglist (and (listp doc) (prog1 (cddr doc) (setq doc (car doc))))))
-    (check-type fn ccl-function)
-    (let ((sym (ccl-function-name fn)))
-      (check-type sym ccl-symbol)
-      (record-debug-info sym doc 'function arglist)
-      (ccl-set-macro-function sym fn))))
+  (check-type fn ccl-function)
+  (let ((sym (ccl-function-name fn)))
+    (check-type sym ccl-symbol)
+    (record-debug-info sym doc 'function)
+    (ccl-set-macro-function sym fn)))
 
 #|
 ;;This is all we need for loading level-0, aside from toplevel fns, to get all the arguments.

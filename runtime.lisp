@@ -393,10 +393,7 @@
     for index from start below len
     finally (return hash)))
 
-(deflapfunction eql (x y) (ccl-eql x y))
-(deflapfunction equal (x y) (ccl-equal x y))
-
-(defun ccl-eql (x  y)
+(deflapfunction eql (x y)
   (or (eq x y)
       (and (ccl-uvector-p x)
            (ccl-uvector-p y)
@@ -408,15 +405,16 @@
                          (let ((xv (ccl-uvector-data x))
                                (yv (ccl-uvector-data y)))
                            (and (eql (length xv) (length yv))
-                                (every #'ccl-eql xv yv))))
+                                (every #'lap-eql xv yv))))
                         (t nil)))))))
 
-(defun ccl-equal (x y)
+
+(deflapfunction equal (x y)
   (or (eq x y)
       (cond ((consp x)
-             (and (consp x) (consp y)
-                  (ccl-equal (car (the cons x)) (car (the cons y)))
-                  (ccl-equal (cdr (the cons x)) (cdr (the cons y)))))
+             (and (consp y)
+                  (lap-equal (car (the cons x)) (car (the cons y)))
+                  (lap-equal (cdr (the cons x)) (cdr (the cons y)))))
             ((and (ccl-simple-base-string-p x) (ccl-simple-base-string-p y))
              (let ((xv (ccl-uvector-data x))
                    (yv (ccl-uvector-data y)))

@@ -44,6 +44,13 @@
 (defun uvector (obj)
   (ccl-uvector-data (if (typep obj 'boolean) (sym-symvector obj) obj)))
 
+(defun uvector-equal (uv1 uv2) ;; true if same type and all data values are eql.
+  (and (eql (ccl-uvector-subtag uv1)
+            (ccl-uvector-subtag uv2))
+       (let ((v1 (ccl-uvector-data uv1))
+             (v2 (ccl-uvector-data uv2)))
+         (and (eql (length v1) (length v2))
+              (every #'eql v1 v2)))))
 
 (defun gvref (uvec index)
   (unless (and (ccl-uvector-p uvec)
@@ -192,6 +199,9 @@
 (defun ccl-string (obj)
   (make-ccl-simple-base-string :subtag subtag-simple-string
                                :data (coerce obj 'simple-vector)))
+
+(defun ccl-vector (obj)
+  (error "ccl-vector not implemented yet for ~s" obj))
 
 ;;;; *** TODO: another weird thing to figure out and bootstrap
 (defvar %find-classes% (make-hash-table :test 'eq))

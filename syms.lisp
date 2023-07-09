@@ -99,7 +99,7 @@
                             )))
 
 (defun pkg-name-p (name pkg)
-  (member name (svref (uvector pkg) pkg.names) :test 'ccl-equal))
+  (member name (svref (uvector pkg) pkg.names) :test 'uvector-equal))
 
 (defun pkg-arg (pkg-arg &optional (error t))
   (if (ccl-package-p pkg-arg)
@@ -158,6 +158,7 @@
     (if (consp pp) (car pp) pp)))
 
 (defun add-sym-to-pkg (sym pkg)
+  (declare (special *keyword-pkg*)) ;; defined below
   (check-type sym ccl-symvector)
   (check-type pkg ccl-package)
   (let ((old (svref (uvector sym) sym.pkg-predicate)))
@@ -305,21 +306,6 @@
 
 (defparameter *native-package* (symbol-package '*native-package*))
 
-(defun ccl-symbol (symbol)
-  (if (typep symbol 'ccl-symbol) ;; note this includes nil and T
-    symbol
-    (progn
-      (check-type symbol symbol)
-      (let* ((native-name (symbol-name symbol))
-             (name (ccl-string native-name)))
-        (if (eq (find-symbol native-name :common-lisp) symbol)
-          (or (find-sym-in-pkg name *cl-pkg*)
-              (error "Unknown CL symbol ~s" symbol))
-          (progn
-            (assert (eq (symbol-package symbol) *native-package*))
-            (find-or-make-sym name *ccl-pkg*)))))))
-
-
 ;;; *** TODO: figure out the transition to native packages
 (defun startup-pkg (names use)
   (make-pkg :names (mapcar #'ccl-string names)
@@ -345,4 +331,18 @@
                       (if (eq native-sym t) *t-sym*
                         (make-ccl-symvector pname)))
                     *cl-pkg*)))
+
+(defun ccl-symbol (symbol)
+  (if (typep symbol 'ccl-symbol) ;; note this includes nil and T
+    symbol
+    (progn
+      (check-type symbol symbol)
+      (let* ((native-name (symbol-name symbol))
+             (name (ccl-string native-name)))
+        (if (eq (find-symbol native-name :common-lisp) symbol)
+          (or (find-sym-in-pkg name *cl-pkg*)
+              (error "Unknown CL symbol ~s" symbol))
+          (progn
+            (assert (eq (symbol-package symbol) *native-package*))
+            (find-or-make-sym name *ccl-pkg*)))))))
 
