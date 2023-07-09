@@ -33,27 +33,29 @@
 
 ;;; ** TODO: rename subtag-symbol to subtag-symvector
 (defmethod print-uvector-data ((type (eql :symbol)) sym stream)
-  (print-uvector-data :simple-string (svref (uvector sym) sym.pname) stream))
+  (print-uvector-data :simple-string (sym-pname sym) stream))
 
-(defun make-ccl-symvector (pname)
+(defun make-ccl-symvector (pname &optional (flags 0) (value *unbound-marker*))
   (check-type pname ccl-simple-base-string)
   (%make-ccl-symvector :subtag subtag-symbol
                        :data (vector pname   ;; pname
-                                     *unbound-marker*  ;;vcell
+                                     value  ;;vcell
                                      *unbound-function* ;; fcell
                                      nil ;;pkg & type predicate
-                                     0  ;; flags
+                                     flags  ;; flags
                                      ()  ;; plist
                                      0))) ;; binding index
 
-(defparameter *nil-sym* (make-ccl-symvector (ccl-string "NIL")))
-(defparameter *t-sym* (make-ccl-symvector (ccl-string "T")))
+(defparameter *nil-sym* (make-ccl-symvector (ccl-string "NIL")
+                                            (logior (ash 1 $sym_vbit_special) (ash 1 $sym_vbit_constant))
+                                            nil))
+(defparameter *t-sym* (make-ccl-symvector (ccl-string "T")
+                                          (logior (ash 1 $sym_vbit_special) (ash 1 $sym_vbit_constant))
+                                          T))
 
 (defparameter *all-packages-sym*
-  (let ((sym (make-ccl-symvector (ccl "%ALL-PACKAGES%"))))
-    (setf (svref (uvector sym) sym.bits) (ash 1 $sym_vbit_special))
-    (setf (svref (uvector sym) sym.vcell) nil)
-    sym))
+  (make-ccl-symvector (ccl-string "%ALL-PACKAGES%") (ash 1 $sym_vbit_special) nil))
+
 
 (def-uvector-subtype :package (ccl-package (:constructor %make-ccl-package) (:subtag-conser t))
   )
@@ -69,6 +71,8 @@
     (if (eq symvector *t-sym*) t
       symvector)))
 
+(defun sym-pname (sym)
+  (svref (ccl-uvector-data (sym-symvector sym)) sym.pname))
 
 ;; This is defined in lispequ is is architecture-independent.
 (defconstant pkg.itab 0)
@@ -138,7 +142,7 @@
 (defun find-sym-in-pkg (name pkg)
   (check-type name ccl-simple-base-string)
   (check-type pkg ccl-package)
-  (let ((hashkey (coerce (uvector name) 'string)) ;; yeah, but it's just for bootstrapping, who cares.
+  (let ((hashkey (native-string name)) ;; conses, but it's just for bootstrapping, who cares.
         (pkg-vec (uvector pkg))
         (sym))
     (if (setq sym (gethash hashkey (svref pkg-vec pkg.itab)))
@@ -167,7 +171,7 @@
       (unless (car old) (setf (car old) pkg))
       (unless old (setf (svref (uvector sym) sym.pkg-predicate) pkg))))
   (let* ((sym-vec (uvector sym))
-         (hashkey (coerce (uvector (svref sym-vec sym.pname)) 'string)))
+         (hashkey (sym-native-pname sym)))
     (if (eq pkg *keyword-pkg*)
       (progn
         (setf (gethash hashkey (svref (uvector pkg) pkg.etab)) sym)
@@ -288,20 +292,21 @@
 ;; Or maybe should replace...
 
 (defun %defconstant (sym val &optional doc)
-  (%defvar sym doc 'constant)
-  (setf (sym-value sym) val)
+  (%defvar sym doc 'constant val)
   (let* ((vec (uvector sym)))
     (setf (svref vec sym.bits)
           (logior (ash 1 $sym_vbit_constant)
                   (svref vec sym.bits)))))
 
-(defun %defvar (sym doc def-type)
-  (check-type sym ccl-symbol)
+(defun %defvar (sym doc def-type &optional (val nil val-p))
+  (check-type sym ccl-symvector)
   (record-debug-info sym doc def-type)
   (let* ((vec (uvector sym)))
     (setf (svref vec sym.bits)
           (logior (ash 1 $sym_vbit_special)
-                  (svref vec sym.bits)))))
+                  (svref vec sym.bits))))
+  (when val-p
+    (setf (sym-value sym) val)))
 
 
 (defparameter *native-package* (symbol-package '*native-package*))
@@ -339,10 +344,13 @@
       (check-type symbol symbol)
       (let* ((native-name (symbol-name symbol))
              (name (ccl-string native-name)))
-        (if (eq (find-symbol native-name :common-lisp) symbol)
-          (or (find-sym-in-pkg name *cl-pkg*)
-              (error "Unknown CL symbol ~s" symbol))
-          (progn
-            (assert (eq (symbol-package symbol) *native-package*))
-            (find-or-make-sym name *ccl-pkg*)))))))
+        (if (keywordp symbol)
+          (find-or-make-sym name *keyword-pkg*)
+          (if (eq (find-symbol native-name :common-lisp) symbol)
+            (or (find-sym-in-pkg name *cl-pkg*)
+                (error "Unknown CL symbol ~s" symbol))
+            (progn
+              (assert (eq (symbol-package symbol) *native-package*))
+              (find-or-make-sym name *ccl-pkg*))))))))
+
 

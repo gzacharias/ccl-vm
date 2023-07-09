@@ -533,7 +533,7 @@
 
 (defbseval $bs-eq (x y) `(eq ,x ,y))
 (defbseval $bs-ne (x y) `(not (eq ,x ,y)))
-(defbseval $bs-builtin-eql (x y) `(ccl-eql ,x ,y))
+(defbseval $bs-builtin-eql (x y) `(lap-eql ,x ,y))
 (defbseval $bs-not (val) `(not ,val))
 (defbseval $bs-yes (val) `(not (null ,val)))
 

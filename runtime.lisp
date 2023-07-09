@@ -17,7 +17,7 @@
 
 (deflapfunction fout (string &rest values)
   (fresh-line *trace-output*)
-  (apply #'format *trace-output* (coerce (uvector string) 'string) values))
+  (apply #'format *trace-output* (native-string string) values))
 
 ;;; ** TODO: do in lap for now so can move on, but need to figure this out.
 
@@ -71,7 +71,7 @@
   (intern (sym-native-pname sym) :keyword))
 
 (defun sym-native-pname (sym)
-  (coerce (uvector (svref (uvector sym) sym.pname)) 'string))
+  (native-string (sym-pname sym)))
 
 (deflapfunction cvm-foreign-size (sym)
   (let ((key (sym-keyword sym)))
@@ -194,7 +194,6 @@
       (error "Not an integer ~s" ccl-number))))
 
 
-;;;; TODO: will need to figure out what to do about "address-based" hashing!
 (deflapfunction %get-gc-count () 17)
 
 (defparameter *fake-addresses-vector* (make-array 100 :fill-pointer 0))
@@ -216,6 +215,7 @@
                   (ash uexp 32)
                   (if (eql sign -1) (ash 1 (+ 32 12)) 0))))
       (vector-push-extend obj *fake-addresses-vector*))))
+
 
 ;; ccl has fast-mod, why doesn't it have an optimizer to use it??
 ;; sbcl does use this.

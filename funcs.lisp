@@ -121,7 +121,6 @@
     (set-documentation name native-type-sym doc)
     (when arglist (record-arglist name arglist))))
 
-(%defconstant (ccl '%unbound-function%) *unbound-function*)
 
 ;; called for fasloading and also runtime.  Should be pretty similar to the actual
 ;; %defun, since will keep getting called for fasloaded functions even after bootstrap.
