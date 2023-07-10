@@ -66,13 +66,6 @@
                (and (typep val 'ccl-fixnum) val)))
         (error "Don't know how to %get-object ~s" addr))))
 
-(defun sym-keyword (sym)
-  (assert (eq (sym-pkg sym) *keyword-pkg*))
-  (intern (sym-native-pname sym) :keyword))
-
-(defun sym-native-pname (sym)
-  (native-string (sym-pname sym)))
-
 (deflapfunction cvm-foreign-size (sym)
   (let ((key (sym-keyword sym)))
     #+ccl (ccl::%foreign-type-or-record-size key :bytes)
@@ -380,6 +373,10 @@
 
 (deflapfunction closure-function (func) (ccl-closure-function func))
 
+(deflapfunction %symptr->symbol (symvector)
+  (if (eq symvector *nil-sym*) nil
+    (if (eq symvector *t-sym*) t
+      (require-type symvector 'ccl-symvector))))
 
 (deflapfunction %set-hash-table-vector-key (vector index value)
   (setf (svref (ccl-uvector-data vector) index) value))
@@ -392,6 +389,9 @@
                               (char-code (aref vec index)))
     for index from start below len
     finally (return hash)))
+
+(deflapfunction %pname-hash (str len)
+  (lap-%string-hash 0 str len))
 
 (deflapfunction eql (x y)
   (or (eq x y)

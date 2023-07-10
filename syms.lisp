@@ -6,6 +6,12 @@
 ;;   They call %find-symbol and %add-symbol which are in level-0;nfasload.  So somewhere along
 ;; in there we need to switch the representation to one that matches CCL.
 
+;;;; *** TODO: eventually might want to be able to reload these files without clobbering the VM,
+;;;;   so should move all the startup things into a start-vm function.
+
+
+(defparameter *level-0-packages* t)
+
 ;; This is defined in x8664-arch, but there is plenty of code around that accesses
 ;; it as target::xxx, so really need all these slots to be there.
 (defconstant sym.pname 0)
@@ -14,7 +20,7 @@
 (defconstant sym.pkg-predicate 3)
 (defconstant sym.bits 4)
 (defconstant sym.plist 5)
-(defconstant sym.binding-index 6)
+;(defconstant sym.binding-index 6) ;; not used since we're single-threaded
 (defconstant sym.size 7)
 
 (defconstant $sym_vbit_bound 0)		;Proclaimed bound.
@@ -74,6 +80,14 @@
 (defun sym-pname (sym)
   (svref (ccl-uvector-data (sym-symvector sym)) sym.pname))
 
+(defun sym-native-pname (sym)
+  (native-string (sym-pname sym)))
+
+(defun sym-pkg (sym)
+  (setq sym (sym-symvector sym))
+  (let ((pp (svref (uvector sym) sym.pkg-predicate)))
+    (if (consp pp) (car pp) pp)))
+
 ;; This is defined in lispequ is is architecture-independent.
 (defconstant pkg.itab 0)
 (defconstant pkg.etab 1)
@@ -87,21 +101,6 @@
 (defmethod print-uvector-data ((type (eql :package)) obj stream)
   (print-uvector-data :simple-string (car (svref (uvector obj) pkg.names)) stream))
 
-;; While bootstrapping, itab and etab are native hash tables.  After bootstrapping,
-;; this function shouldn't get used!
-(defun cons-pkg ()
-  (%make-ccl-package :subtag subtag-package
-                     :data (vector
-                            (make-hash-table :test 'equal) ;; itab
-                            (make-hash-table :test 'equal);; etab
-                            ()  ;; used
-                            ()  ;; used-by
-                            ()  ;; names
-                            ()  ;; shadowed
-                            NIL ;; lock, don't need it.
-                            nil ;; intern-hook
-                            )))
-
 (defun pkg-name-p (name pkg)
   (member name (svref (uvector pkg) pkg.names) :test 'uvector-equal))
 
@@ -111,58 +110,63 @@
     (or (find pkg-arg (sym-value *all-packages-sym*) :test #'pkg-name-p)
         (and error (error "No package named ~s" pkg-arg)))))
 
-(defun make-pkg (&key names use)
-  (init-pkg (cons-pkg) names use))
+;; COuld indirect through sym, but this is bootstrapping, so messing around with
+;; %find-symbol/%add-symbol is not supported.
+(defparameter *%find-symbol-func* nil)
+(defparameter *%add-symbol-func* nil)
 
-(defun init-pkg (pkg names use)
-  (check-type pkg ccl-package)
-  (assert (every #'ccl-simple-base-string-p names))
-  (assert (not (find pkg (sym-value *all-packages-sym*))))
-  (let ((pkg-vec (uvector pkg))
-        (pkgs-to-use (mapcar #'pkg-arg use))
-        (added nil)
-        (done nil))
-    (setf (svref pkg-vec pkg.names) (copy-list names))
-    (unwind-protect
-        (loop for other in pkgs-to-use
-          do (push other (svref pkg-vec pkg.used))
-          do (let ((other-vec (uvector other)))
-               (push other-vec added)
-               (push pkg (svref other-vec pkg.used-by)))
-          finally (setq done t))
-      (if done
-        (push pkg (sym-value *all-packages-sym*))
-        (loop for other-vec in added
-          do (setf (svref other-vec pkg.used-by)
-                   (remove pkg (svref other-vec pkg.used-by))))))
-    pkg))
+;; CCL packages are going to be too slow.  Need to intercept something and either
+;; make it lap, or introduce some caching
 
-
+(defun unbootstrap-packages ()
+  (setq *%find-symbol-func* (sym-func (ccl '%find-symbol)))
+  (setq *%add-symbol-func* (sym-func (ccl '%add-symbol)))
+  (let ((resize-func (sym-func (ccl '%resize-htab))))
+    (flet ((update-htab (hash)
+             (when (consp hash)
+               (cerror "package HTAB already updated" "ignore")
+               (return-from update-htab hash))
+             (let* ((count (hash-table-count hash))
+                    (vec (make-array count :initial-element 0))
+                    (htab (list* (make-ccl-uvector :subtag subtag-simple-vector :data vec) count count)))
+               (format t "~&   hash ~s count ~s" hash count)
+               (loop for sym being the hash-value of hash as index upfrom 0
+                 do (setf (svref vec index) sym)
+                 finally (format t " (last index ~s)" index))
+               (ccl-funcall resize-func htab))))
+      (loop for pkg in (sym-value *all-packages-sym*)
+        do (format t "~&Updating ~s" pkg)
+        do (let* ((pkg-vec (ccl-uvector-data pkg))
+                  (itab (update-htab (svref pkg-vec pkg.itab)))
+                  (etab (update-htab (svref pkg-vec pkg.etab))))
+             (setf (svref pkg-vec pkg.itab) itab)
+             (setf (svref pkg-vec pkg.etab) etab))))
+    (setq *level-0-packages* nil)))
 
 (defun find-sym-in-pkg (name pkg)
   (check-type name ccl-simple-base-string)
   (check-type pkg ccl-package)
-  (let ((hashkey (native-string name)) ;; conses, but it's just for bootstrapping, who cares.
-        (pkg-vec (uvector pkg))
-        (sym))
-    (if (setq sym (gethash hashkey (svref pkg-vec pkg.itab)))
-      (values (symvector-sym sym) :internal)
-      (if (setq sym (gethash hashkey (svref pkg-vec pkg.etab)))
-        (values (symvector-sym sym) :external)
-        (if (setq sym (loop for p in (svref pkg-vec pkg.used)
-                        thereis (gethash hashkey (svref (uvector p) pkg.etab))))
-          (values (symvector-sym sym) :inherited))))))
+  ;; Note with in level-0, second value is a native keyword, afterwards it's a ccl sym.
+  ;; Doesn't matter because it's only used as a boolean
+  (if *level-0-packages*
+    (let ((hashkey (native-string name)) ;; conses, but it's just for bootstrapping, who cares.
+          (pkg-vec (uvector pkg))
+          (sym))
+      (if (setq sym (gethash hashkey (svref pkg-vec pkg.itab)))
+        (values (symvector-sym sym) :internal)
+        (if (setq sym (gethash hashkey (svref pkg-vec pkg.etab)))
+          (values (symvector-sym sym) :external)
+          (if (setq sym (loop for p in (svref pkg-vec pkg.used)
+                          thereis (gethash hashkey (svref (uvector p) pkg.etab))))
+            (values (symvector-sym sym) :inherited)))))
+    (ccl-funcall *%find-symbol-func* name (uvsize name) pkg)))
 
 (defun sym-in-pkg-p (name pkg)
   (nth-value 1 (find-sym-in-pkg name pkg)))
 
-(defun sym-pkg (sym)
-  (setq sym (sym-symvector sym))
-  (let ((pp (svref (uvector sym) sym.pkg-predicate)))
-    (if (consp pp) (car pp) pp)))
-
-(defun add-sym-to-pkg (sym pkg)
+(defun add-sym-to-pkg (sym pkg &optional (export-p nil))
   (declare (special *keyword-pkg*)) ;; defined below
+  (ASSERT *LEVEL-0-PACKAGES*)
   (check-type sym ccl-symvector)
   (check-type pkg ccl-package)
   (let ((old (svref (uvector sym) sym.pkg-predicate)))
@@ -180,78 +184,70 @@
               (logior (ash 1 $sym_vbit_special)
                       (ash 1 $sym_vbit_constant)
                       (svref sym-vec sym.bits))))
-      (setf (gethash hashkey (svref (uvector pkg) pkg.itab)) sym)))
+      (if export-p
+        (setf (gethash hashkey (svref (uvector pkg) pkg.etab)) sym)
+        (setf (gethash hashkey (svref (uvector pkg) pkg.itab)) sym))))
   (assert (null (svref (uvector pkg) pkg.intern-hook)))
   sym)
 
-(defun find-or-make-sym (name pkg)
-  (multiple-value-bind (sym found-p) (find-sym-in-pkg name pkg)
-    (if found-p
-      sym
-      (add-sym-to-pkg (make-ccl-symvector name) pkg))))
+(defun find-or-make-sym (name pkg &optional dont-need-to-copy-name-p)
+  (if *level-0-packages*
+    (multiple-value-bind (sym found-p) (find-sym-in-pkg name pkg)
+      (if found-p
+        sym
+        (add-sym-to-pkg (make-ccl-symvector name) pkg)))
+    ;; intern not defined yet, but it's basically this.
+    (multiple-value-bind (sym found-p ioffs eoffs) (find-sym-in-pkg name pkg)
+      (if found-p
+        sym
+        (ccl-funcall *%add-symbol-func*
+                     (if dont-need-to-copy-name-p
+                       name
+                       (let ((v (ccl-uvector-data name)))
+                         (ccl-string (make-array (length v) :initial-contents v))))
+                     pkg ioffs eoffs)))))
 
-;;;; BINDING INDEX: in L0-symbol, defined within a lexical var cloak,
-;;;   in l0, so it's in the initial image
-;;;; ENSURE-BINDING-INDEX looks at symbol,
-;;;  if it's either global or const, then clear the binding index.
-;;;  otherwise, give it a binding index if it doesn't have one.
-;;;;  There is a hash table mapping INDEX <-> SYMBOL
-;;;;  In the cold load, assign binding indices, then at end of %toplevel-function%  MAP OVER MEMORY!!!
-;;;;    to find all symbols and set the reverse mapping!  CHANGE THAT SO COLD-LOAD MAKES A LIST OF THE SYMBOLS.
 
-;;; **
-(defvar *bootstrapping-binding-index* 0)
-(defvar *bootstrapping-binding-index-vars* (make-hash-table :test #'eql))
-
-;; TO switch to CCL maintaining the binding index, maphash and call #CCL:cold-load-binding-index
-;; on all the syms
-;; In L0-syms, so need to switch over somehow once L0-symbol is loaded.
-;;  I think this needs to be done by having an interim definition for things in the VM...
-
-;;; MAKE CCL-SYMBOL be a union type, define (uvector nil) to return *nil-sym*'s uvector?
-
-;; 
-(defparameter *no-thread-local-binding-marker* 'no-thread-local-binding)
-
-;; these would be per thread, if we had threads.
-(defvar *special-bindings-vector* (make-array 2
-                                              :adjustable t
-                                              :fill-pointer 1
-                                              :initial-element *no-thread-local-binding-marker*))
-
+;; Since we're single-threaded, there is only one value, and that is the global value!
 (defun sym-boundp (sym)
   (let* ((symvec (sym-symvector sym))
-         (index (svref (uvector symvec) sym.binding-index)))
-    (let ((val (if (and (< index (length *special-bindings-vector*))
-                        (not (eq *no-thread-local-binding-marker*
-                                 (aref *special-bindings-vector* index))))
-                 (aref *special-bindings-vector* index)
-                 (svref (uvector symvec) sym.vcell))))
-      (not (eq val *unbound-marker*)))))
+         (val #+vm-threads (let ((index (svref (uvector symvec) sym.binding-index)))
+                             (if (and (< index (length *thread-local-special-bindings-vector*))
+                                      (not (eq *no-thread-local-binding-marker*
+                                               (aref *thread-local-special-bindings-vector* index))))
+                               (aref *thread-local-special-bindings-vector* index)
+                               (svref (uvector symvec) sym.vcell)))
+              #-vm-threads (svref (uvector symvec) sym.vcell)))
+    (not (eq val *unbound-marker*))))
 
-;; spentry(specrefcheck)
+;; Since we're single-threaded, there is only one value, and that is the global value!
 (defun sym-value (sym)
   (let* ((symvec (sym-symvector sym))
-         (index (svref (uvector symvec) sym.binding-index)))
-    (let ((val (if (and (< index (length *special-bindings-vector*))
-                        (not (eq *no-thread-local-binding-marker*
-                                 (aref *special-bindings-vector* index))))
-                 (aref *special-bindings-vector* index)
-                 (svref (uvector symvec) sym.vcell))))
-      (if (eq val *unbound-marker*)
-        (error "Unbound variable ~s" sym)
-        val))))
+         (val #+vm-threads (let ((index (svref (uvector symvec) sym.binding-index)))
+                             (if (and (< index (length *level-0-special-bindings-vector*))
+                                      (not (eq *no-thread-local-binding-marker*
+                                               (aref *level-0-special-bindings-vector* index))))
+                               (aref *level-0-special-bindings-vector* index)
+                               (svref (uvector symvec) sym.vcell)))
+              #-vm-threads (svref (uvector symvec) sym.vcell)))
+    (if (eq val *unbound-marker*)
+      (error "Unbound variable ~s" sym)
+      val)))
 
 ;; spentry(specset)  (ed "ccl:lisp-kernel;x86-spentry64.s")
+;; Since we're single-threaded, there is only one value, and that is the global value!
 (defun (setf sym-value) (val sym)
   (typecode val) ;; check that a ccl object
-  (let* ((symvec (sym-symvector sym))
-         (index (svref (uvector symvec) sym.binding-index)))
-    (if (and (< index (length *special-bindings-vector*))
-             (not (eq *no-thread-local-binding-marker*
-                      (aref *special-bindings-vector* index))))
-      (setf (aref *special-bindings-vector* index) val)
-      (setf (svref (uvector symvec) sym.vcell) val))))
+  (assert (not (eq val *unbound-marker*)))
+  #+vm-threads (let* ((symvec (sym-symvector sym))
+                      (index (svref (uvector symvec) sym.binding-index)))
+                 (if (and (< index (length *special-bindings-vector*))
+                          (not (eq *no-thread-local-binding-marker*
+                                   (aref *special-bindings-vector* index))))
+                   (setf (aref *special-bindings-vector* index) val)
+                   (setf (svref (uvector symvec) sym.vcell) val)))
+  #-vm-threads (let* ((symvec (sym-symvector sym)))
+                 (setf (svref (uvector symvec) sym.vcell) val)))
 
 (defun sym-fboundp (sym)
   (let* ((symvec (sym-symvector sym))
@@ -271,13 +267,13 @@
   (let* ((symvec (sym-symvector sym)))
     (setf (svref (uvector symvec) sym.fcell) val)))
 
+#+vm-threads
 (defun ensure-binding-index (sym)
   (let* ((symvec (sym-symvector sym))
          (index (svref (uvector symvec) sym.binding-index))
          (bits (svref (uvector symvec) sym.bits)))
-    (if (or (logbitp $sym_vbit_global bits)
+    (if (or (logbitp $sym_vbit_global bits)      ;; globals don't need binding index.
             (logbitp $sym_vbit_constant bits))
-      ;; globals don't need binding index.
       (unless (zerop index)
         (setf (aref *special-bindings-vector* index) *no-thread-local-binding-marker*)
         (setf (svref (uvector sym) sym.binding-index) 0))
@@ -287,10 +283,60 @@
                                   *special-bindings-vector*
                                   100))))))
 
+;; While bootstrapping, itab and etab are native hash tables. Everything else is real.
+(defun initial-pkg (names use)
+  (assert *level-0-packages*)
+  (let* ((pkg-vec (vector
+                   (make-hash-table :test 'equal) ;; itab
+                   (make-hash-table :test 'equal) ;; etab
+                   () ;; used
+                   ()  ;; used-by
+                   (mapcar #'ccl-string names) ;; names
+                   ()  ;; shadowed
+                   nil ;; lock, don't need it.
+                   nil ;; intern-hook
+                   ))
+         (pkg (%make-ccl-package :subtag subtag-package :data pkg-vec))
+         (pkgs-to-use (mapcar #'(lambda (s) (pkg-arg (ccl-string s))) use))
+         (added nil)
+         (done nil))
+    (unwind-protect
+        (loop for other in pkgs-to-use
+          do (push other (svref pkg-vec pkg.used))
+          do (let ((other-vec (ccl-uvector-data other)))
+               (push other-vec added)
+               (push pkg (svref other-vec pkg.used-by)))
+          finally (setq done t))
+      (if done
+        (push pkg (sym-value *all-packages-sym*))
+        (loop for other-vec in added
+          do (setf (svref other-vec pkg.used-by)
+                   (remove pkg (svref other-vec pkg.used-by))))))
+    pkg))
+
+(defparameter *cl-pkg*      (initial-pkg '("COMMON-LISP" "CL") ()))
+(defparameter *keyword-pkg* (initial-pkg '("KEYWORD") ()))
+(defparameter *ccl-pkg*     (initial-pkg '("CCL") '("COMMON-LISP")))
+(defparameter *target-pkg*  (initial-pkg '("CVM" "TARGET") '("COMMON-LISP")))
+(defparameter *os-pkg*      (initial-pkg '("CVM-DARWIN64" "OS") '("COMMON-LISP")))
+(defparameter *ffi-pkg*     (initial-pkg '("CVMDARWIN-FFI") ()))
+
+;; Initialize the COMMON-LISP package..  Assume our host is compliant and just copy theirs.
+;; Note this doesn't set up flags, that should happen as we load.
+(do-external-symbols (native-sym :common-lisp)
+  (let ((pname (ccl-string (symbol-name native-sym))))
+    (assert (not (sym-in-pkg-p pname *cl-pkg*)))
+    (add-sym-to-pkg (if (null native-sym) *nil-sym*
+                      (if (eq native-sym t) *t-sym*
+                        (make-ccl-symvector pname)))
+                    *cl-pkg*
+                    t)))
+
+(add-sym-to-pkg *all-packages-sym* *ccl-pkg*)
+
 ;; called for fasloading and also runtime.  Should be pretty similar to the actual
 ;; %defconstant/%defvar/%defparameter, since will keep getting called for fasloaded functions even after bootstrap.
 ;; Or maybe should replace...
-
 (defun %defconstant (sym val &optional doc)
   (%defvar sym doc 'constant val)
   (let* ((vec (uvector sym)))
@@ -311,32 +357,6 @@
 
 (defparameter *native-package* (symbol-package '*native-package*))
 
-;;; *** TODO: figure out the transition to native packages
-(defun startup-pkg (names use)
-  (make-pkg :names (mapcar #'ccl-string names)
-            :use (mapcar #'ccl-string use)))
-
-(defparameter *cl-pkg*      (startup-pkg '("COMMON-LISP" "CL") nil))
-(defparameter *keyword-pkg* (startup-pkg '("KEYWORD") nil))
-(defparameter *ccl-pkg*     (startup-pkg '("CCL") '("COMMON-LISP")))
-(defparameter *target-pkg*  (startup-pkg '("CVM" "TARGET") '("COMMON-LISP")))
-(defparameter *os-pkg*      (startup-pkg '("CVM-DARWIN64" "OS") '("COMMON-LISP")))
-  ;; This is  our  own thing, part of faking of the foreign function support.
-  ;; might not need it.
-(defparameter *ffi-pkg* (startup-pkg '("CVMDARWIN-FFI") nil))
-
-(add-sym-to-pkg *all-packages-sym* *ccl-pkg*)
-
-;; Initialize the COMMON-LISP package..  Assume our host is compliant and just copy theirs.
-;; Note this doesn't set up flags, that should happen as we load.
-(do-external-symbols (native-sym :common-lisp)
-  (let ((pname (ccl-string (symbol-name native-sym))))
-    (assert (not (sym-in-pkg-p pname *cl-pkg*)))
-    (add-sym-to-pkg (if (null native-sym) *nil-sym*
-                      (if (eq native-sym t) *t-sym*
-                        (make-ccl-symvector pname)))
-                    *cl-pkg*)))
-
 (defun ccl-symbol (symbol)
   (if (typep symbol 'ccl-symbol) ;; note this includes nil and T
     symbol
@@ -353,4 +373,7 @@
               (assert (eq (symbol-package symbol) *native-package*))
               (find-or-make-sym name *ccl-pkg*))))))))
 
+(defun sym-keyword (sym)
+  (assert (eq (sym-pkg sym) *keyword-pkg*))
+  (intern (sym-native-pname sym) :keyword))
 

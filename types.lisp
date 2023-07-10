@@ -73,6 +73,9 @@
   (check-type val ccl-object)
   (setf (svref (ccl-uvector-data uvec) index) val))
 
+(defun (setf uvref) (val uvec index)
+  (uvset uvec index val))
+
 (defun uvsize (uvec)
   (check-type uvec ccl-uvector)
   (length (ccl-uvector-data uvec)))
@@ -207,6 +210,7 @@
 (defun ccl-vector (obj)
   (error "ccl-vector not implemented yet for ~s" obj))
 
+#|
 ;;;; *** TODO: another weird thing to figure out and bootstrap
 (defvar %find-classes% (make-hash-table :test 'eq))
 
@@ -224,4 +228,4 @@
                                             (ccl '%make-instance)
                                             nil)))))))
 
-
+|#

@@ -1,6 +1,8 @@
 (defpackage :ccl-vm
   (:use :common-lisp))
 
+(in-package :cl-user)
+
 (require'quicklisp)
 (unless (find-package "CFFI")
   (ql:quickload 'cffi))

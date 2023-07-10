@@ -178,7 +178,9 @@
 (defbseval $bs-values (&rest values) `(values ,@values))
 (defbseval $bs-nth-value (n form) `(nth-value ,n ,form))
 
-#+NOTYET (defbseval $bs-progv (symbols values body) `(progv ,symbols ,values ,body))
+#+NOTYET (defbseval $bs-progv (symbols values body)
+           #+vm-threads (mapcar #'ensure-binding-index symbols)
+           `(progv ,symbols ,values ,body))
 
 (defun bseval-tagbody-forms (form-vector)
   (check-type form-vector simple-vector)
@@ -502,7 +504,7 @@
 (defbseval $bs-make-uvector (size subtag)
   `(make-uvector ,size ,subtag))
 
-(defun make-uvector (size subtag &optional (init (cond ((gvector-type-p subtag) nil)
+(defun make-uvector (size subtag &optional (init (cond ;;((gvector-type-p subtag) nil) no, CCL inits all arrays to 0!
                                                        ((eq subtag subtag-simple-string) #\null)
                                                        (t 0))))
   (let ((conser (or (cdr (assoc subtag *subtag-consers*)) 'make-ccl-uvector)))

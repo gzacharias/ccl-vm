@@ -17,9 +17,48 @@
         (setf (ccl::backend-target-fasl-pathname ccl::*cvm-backend*) fasl)))
     (load file)))
 
+;; Don't load nfasload!  We don't plan to use it, we just want to be able to
+;;  use the compiler and we'll be using our loader.
+
+;; Then can replace the stuff in there that's used elsewhere with LAP, and
+;;  keep packages fast.
+#|  Stuff that happens at load time in nfasload.
+defines find-package, set-package, pkg-arg, register-package-ref as possibly 
+
+Ok, wait, l1-symhash uses stuff:
+  %htab-add-symbol
+  %find-symbol
+Maybe others.  But nobody else uses pkg.itab/pkg.etab!
+
+(defvar *package-refs*)
+(setq *package-refs* (make-hash-table :test #'equal))
+(defvar *package-refs-lock*)
+(setq *package-refs-lock* (make-lock))
+
+(dolist (p %all-packages%)
+  (dolist (name (pkg.names p))
+    (setf (package-ref.pkg (register-package-ref name)) p)))
+
+(let* ((force-export-packages (list *keyword-package*))
+       (force-export-packages-lock (make-lock)))
+  (defun force-export-packages ()
+    (with-lock-grabbed (force-export-packages-lock)
+      (copy-list force-export-packages)))
+  (defun package-force-export (p)
+    (let* ((pkg (pkg-arg p)))
+      (with-lock-grabbed (force-export-packages-lock)
+        (pushnew pkg force-export-packages))
+    pkg))
+  (defun force-export-package-p (pkg)
+    (with-lock-grabbed (force-export-packages-lock)
+      (if (memq pkg force-export-packages)
+        t))))
+|#
+
 (defun cvmload-level-0 (files)
   (let ((calls
          (loop for file in files
+           unless (string-equal (pathname-name file) "nfasload")
            collect (let ((*deferred-level-0-calls* (list file)))
                      (cvmload file)
                      (nreverse *deferred-level-0-calls*)))))
@@ -35,53 +74,37 @@
     (%defvar (ccl'*gc-event-status-bits*) () 'variable 0)
     (%defvar (ccl '%toplevel-catch%) () 'variable (ccl :toplevel))
     ; %closure-code%, %macro-code%, %builtin-functions%
-
-    ;<load level-0, which will set *xload-startup-file*
-    ;;;; TODO******* So this needs to somehow come in from the compiler, because that's who knowns where it puts it.
-    (%defvar (ccl '*xload-startup-file*) () 'variable (ccl "level-1.cvmfsl"))
-    ;; <check that %toplevel-function% got set
-    ;; <save *xcold load functions*>
-    ;; find-class-cell is now defined in l0-pred, so no need for *early-class-cells*
-
-    ; l0-pred does defparameter *istruct-cells* NIL, so whatever we do before loading will go away anyhow.
-    ;; could change it to defvar.
-
-    ;; (%defvar (ccl '*istruct-cells*) () 'variable *ISTRUCT-CELLS*) ;; who's going to look at it.
-    (%defvar (ccl '*openmcl-svn-revision*) () 'variable nil)
-
-    ;; **** figure this out, because we aint in CCL no more..
-    ;(%defvar (ccl '*optional-features*) () 'variable  (mapcar 'ccl-symbol CCL::*BUILD-TIME-OPTIONAL-FEATURES*))
-
     ;;(setf (xload-symbol-value (xload-copy-symbol '*xload-cold-load-documentation*))
     ;;      (xload-save-list (setq *xload-cold-load-documentation*
     ;;                             (nreverse *xload-cold-load-documentation*))))
-
     (loop for info in calls
       do (format t "~2&~s CALLS FOR FILE ~s" (length (cdr info)) (car info))
       do (loop for fn in (cdr info) for index upfrom 1
            do (format t "~&  Call #~s" index)
-           do (ccl-funcall fn)))))
+           do (ccl-funcall fn)))
+
+    ;;;; TODO******* So this needs to somehow come in from the compiler, because that's who knowns where it puts it.
+    (%defvar (ccl '*xload-startup-file*) () 'variable (ccl "level-1.cvmfsl"))
+    (%defvar (ccl '*openmcl-svn-revision*) () 'variable nil) ;; (local-vc-revision) -- SO THIS NEEDS TO BE FROM COMPILE/XLOAD time again
+    (%defvar (ccl '*optional-features*) () 'variable nil) ;(mapcar 'ccl-symbol CCL::*BUILD-TIME-OPTIONAL-FEATURES*)
+
+    (unbootstrap-documentation)
+    ;;(unbootstrap-packages)
+    ;;(%fasload *xload-startup-file*))
+    ;;; FIrst few files.
+    ;(l1-load "l1-cl-package")
+    ;(l1-load "l1-utils")
+    ;(l1-load "l1-init")
+    ;(l1-load "l1-symhash")
+    ;(l1-load "l1-numbers")
+    ;(l1-load "l1-aprims")
+    ))
 
 
+    ;; ** ONCE SWITCH TO native packages, lookup won't be so fast.  Maybe have a cache of
+    ;; all the stuff that goes through ccl-symbol, don't need to support shadowing and
+    ;; such just to run the compiler.
 
-
-;; based on %toplevel-function% in level-0;nfasload.
-;; this could be in lisp..
-#+not-yet
-(defun startup-lisp ()
-  (let ((cells (sym-value (ccl '*early-class-cells))))
-    (setf (sym-value '*early-class-cells*) nil)
-  (dolist (pair (prog1 *early-class-cells* (setq *early-class-cells* nil)))
-        (setf (gethash (car pair) %find-classes%) (cdr pair)))
-      (dolist (p %all-packages%)
-        (%resize-htab (pkg.itab p))
-        (%resize-htab (pkg.etab p)))
-      (dolist (f (prog1 *xload-cold-load-documentation* (setq *xload-cold-load-documentation* nil)))
-        (apply 'set-documentation f))
-      ;; Can't bind any specials until this happens
-      (let ((max (reset-binding-indexes)))
-        (%set-binding-index max))
-      (%fasload *xload-startup-file*)))
 
   
 
@@ -177,12 +200,9 @@ $bs-gvector $bs-uvector $bs-eval)
   (check-type name ccl-simple-base-string)
   (pkg-arg name))
 
-(defun $fs-symbol (name pkg binding-p)
-  (fasl-trace "   ~s ~s ~s ~s" '$fs-symbol name pkg binding-p)
-  (let* ((sym (find-or-make-sym name pkg)))
-    (when binding-p
-      (ensure-binding-index sym))
-    sym))
+(defun $fs-symbol (name pkg)
+  (fasl-trace "   ~s ~s ~s" '$fs-symbol name pkg)
+  (find-or-make-sym name pkg))
 
 (defun $fs-string (string)
   (check-type string string)
