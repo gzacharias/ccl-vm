@@ -45,6 +45,6 @@
   ;(load "ccl:compiler;cvm;cvm-arch.lisp")
   ;(load "ccl:compiler;cvm;cvm-backend.lisp")
   (load-cvm)
-  (let ((files (sort (directory "ccl:level-0;cvmfasls;*.cvmfsl") #'string-lessp :key #'pathname-name)))
+  (let ((files (sort (directory "ccl:level-0;cvmsrcs;*.cvmsrc") #'string-lessp :key #'pathname-name)))
     (ccl-vm::cvmload-level-0 files)))
 

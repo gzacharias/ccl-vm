@@ -3,20 +3,6 @@
 ;;;; *** TODO: there are too many forward references in level-0. 
 (defvar *deferred-level-0-calls* nil)
 
-;;;; *** TODO: need to kludge around this - on one hand we want fasl-pathanme to be in
-;;; the backend, so produce the right files, but don't want to load them as fasls!!
-;;; instead of using backend-target-fals-pathname in bscompile, just kludge something.
-(defun load-as-source (file)
-  ;; If we happen to have cvm-backend loaded in the same lisp, ccl won't load our files from source.
-  (if #+ccl (boundp 'ccl::*cvm-backend*)  #-ccl nil
-    (let ((fasl (ccl::backend-target-fasl-pathname ccl::*cvm-backend*)))
-      (unwind-protect
-          (progn
-            (setf (ccl::backend-target-fasl-pathname ccl::*cvm-backend*) #P".NOTHING-TO-SEE-HERE")
-            (load file))
-        (setf (ccl::backend-target-fasl-pathname ccl::*cvm-backend*) fasl)))
-    (load file)))
-
 ;; Don't load nfasload!  We don't plan to use it, we just want to be able to
 ;;  use the compiler and we'll be using our loader.
 
@@ -84,7 +70,7 @@ Maybe others.  But nobody else uses pkg.itab/pkg.etab!
            do (ccl-funcall fn)))
 
     ;;;; TODO******* So this needs to somehow come in from the compiler, because that's who knowns where it puts it.
-    (%defvar (ccl '*xload-startup-file*) () 'variable (ccl "level-1.cvmfsl"))
+    (%defvar (ccl '*xload-startup-file*) () 'variable (ccl "level-1.cvmsrc"))
     (%defvar (ccl '*openmcl-svn-revision*) () 'variable nil) ;; (local-vc-revision) -- SO THIS NEEDS TO BE FROM COMPILE/XLOAD time again
     (%defvar (ccl '*optional-features*) () 'variable nil) ;(mapcar 'ccl-symbol CCL::*BUILD-TIME-OPTIONAL-FEATURES*)
 
@@ -109,7 +95,7 @@ Maybe others.  But nobody else uses pkg.itab/pkg.etab!
   
 
 (defun cvmload  (file)
-  (assert (equal (pathname-type file) "cvmfsl"))
+  (assert (equal (pathname-type file) "cvmsrc"))
   ;; Should we compile then load?  Only worth if can avoid the compile!
   ;; Which means we need to figure out fasl file conventions in the lisp.
   ;; Worry about it later
@@ -117,9 +103,9 @@ Maybe others.  But nobody else uses pkg.itab/pkg.etab!
         (*package* (find-package :ccl-vm)))
     ;;; TODO: need to ccl-bind *package* so can then set it.
     (declare (special *loader-table*))
-    (load-as-source file)))
+    (load file)))
 
-;; a CVMFSL file is a bunch of toplevel calls to these $fasl functions.  The arguments
+;; a CVMSRC file is a bunch of toplevel calls to these $fasl functions.  The arguments
 ;; (once evaluated in the host lisp) are BSEVAL expressions, can then be BSEVAL'ed to yield
 ;; various native objects, or effect sideffects in the VM...
 
