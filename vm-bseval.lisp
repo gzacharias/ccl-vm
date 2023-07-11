@@ -515,11 +515,7 @@
 
 ;; This has to be split off for level-0.
 ;;;  TODO: it doesn't need to be split off, subtag is a fixnum so can make decisions at load time if need to.
-(defbseval $bs-make-gvector-init (subtag size init)
-  (check-type subtag fixnum) ;;so can change order of evaluation
- `(make-uvector ,size ,subtag ,init))
-(defbseval $bs-make-ivector-init (subtag size init)
-  (check-type subtag fixnum)
+(defbseval $bs-make-uvector-init (size subtag init)
  `(make-uvector ,size ,subtag ,init))
 
 ;;; The builtin subprims do simple case inline (e.g. fixnum), but punt to lisp function
