@@ -2,14 +2,33 @@
 
 ;;; TODO: change naming so these things are :funcs, make-ccl-func, ensure-func, etc.
 ;;; or lfun.  but not "function"
+;(SETQ *PRINT-CATCH-ERRORS* NIL)
 
+(defmethod print-object ((fn ccl-function) stream)
+  (assert (eq (uvector-subtag fn) subtag-function))
+  (princ "<FUNC " stream)
+  (print-function-data fn stream)
+  (princ ">" stream))
+  
 
-(defmethod print-uvector-data ((type (eql :function)) obj stream)
-  (when (ccl-function-native-fn obj) (princ "Compiled " stream))
-  (let ((name (ccl-function-name obj)))
-    (if (typep name 'ccl-symbol)
-      (print-uvector-data :symbol (sym-symvector name) stream)
-      (print-object name stream))))
+;(defconstant combined-method.thing 0)
+;(defconstant combined-method.dcode 1)
+;(defconstant combined-method.gf 2)
+
+;(defconstant gf.class-wrapper 0)
+(defconstant gf.slots 1)
+;(defconstant gf.dispatch-table 2)
+;(defconstant gf.dcode 3)
+;(defconstant gf.hash 4)
+
+(defconstant sgf.name 1)
+;(defconstant sgf.method-combination 2)
+;(defconstant sgf.method-class 3)
+;(defconstant sgf.methods 4)
+;(defconstant sgf.decls 5)
+;(defconstant sgf.%lambda-list 6)
+;(defconstant sgf.dependents 7)
+
 
 (defconstant $lfbits-nonnullenv-bit 0)
 (defconstant $lfbits-keys-bit 1)
@@ -30,9 +49,46 @@
 (defconstant $lfbits-method-bit 28)     ; method function
 (defconstant $lfbits-noname-bit 29)
 
+(defun func-name (fn)
+  (let ((bits (ccl-function-bits fn)))
+    (cond ((logbitp $lfbits-method-bit bits)
+           (let ((name (ccl-function-name (ccl-closure-function fn))))
+             (if (ccl-instance-p name)
+               (instance-slot name %method.name)
+               ;; method object hasn't been installed yet.
+               name)))
+          ((logbitp $lfbits-cm-bit bits) ;; same as nextmeth bit in methods
+           (assert (eq (ccl-function-bslambda fn) 'combined-method))
+           (func-name (ccl-function-name fn)))
+          ((logbitp $lfbits-gfn-bit bits)
+           (assert (eq (ccl-function-bslambda fn) 'gf))
+           (uvref (uvref fn gf.slots) sgf.name))
+          (t (ccl-function-name (ccl-closure-function fn))))))
+
+(defmethod print-uvector-data ((type (eql :function)) fn stream) (print-function-data fn stream))
+
+(defun print-function-data (fn stream)
+  (let* ((bits (ccl-function-bits fn))
+         (name (func-name fn)))
+    (if (ccl-function-native-fn fn)
+      (if (consp (ccl-function-bslambda fn))
+        (princ "Compiled" stream)
+        (prin1 (ccl-function-bslambda fn) stream))
+      (princ "Interp" stream))
+    (when (logbitp $lfbits-method-bit bits)
+      (princ (if (ccl-instance-p (ccl-function-name (ccl-closure-function fn)))
+               " Meth"
+               " Raw Meth") stream))
+    (when (logbitp $lfbits-trampoline-bit bits)
+      (princ " trampoline" stream))
+    (princ " " stream)
+    (if (typep name 'ccl-symbol)
+      (print-symbol-data (sym-symvector name) stream)
+      (print-object name stream))))
+
 (defun cons-ccl-function ()
   (%make-ccl-function :subtag subtag-function
-                      :data (vector nil 0)))
+                      :data #()))
 
 
 ;; CCL assumes bits and name are stored in the "lfun-vector"
@@ -62,15 +118,49 @@
 
 (defun ccl-closure-function (fn)
   (loop while (logbitp $lfbits-trampoline-bit (ccl-function-bits fn))
-    do (setq fn (svref (ccl-function-data fn) 0)))
+    do (setq fn (svref (ccl-function-data fn) 0))
+    do (when (eq (uvector-subtag fn) subtag-simple-vector) ;?
+         (setq fn (svref (uvector-data fn) 0)))
+    do (assert (ccl-function-p fn)))
   fn)
 
-(defun init-ccl-function (fn bslambda bits)
-  (setq bits (logandc2 bits (ash 1 $lfbits-noname-bit)))
-  (assert (not (ccl-function-native-fn fn)))
+(defun ccl-function-type-name (fn)
+  (let ((bits (ccl-function-bits fn)))
+    (declare (fixnum bits))
+    (if (logbitp $lfbits-trampoline-bit bits)
+      (let* ((inner-fn (ccl-closure-function fn))
+             (inner-bits (ccl-function-bits inner-fn)))
+        (assert (not (eq inner-fn fn)))
+        (if (logbitp $lfbits-method-bit inner-bits) ;;???
+          (progn
+            (error "What is this?")
+            'compiled-lexical-closure)
+          (if (logbitp $lfbits-gfn-bit inner-bits)
+            'standard-generic-function
+            (if (logbitp $lfbits-cm-bit inner-bits)
+              'combined-method
+              'compiled-lexical-closure))))
+      (if (logbitp  $lfbits-method-bit bits)
+        'method-function
+        'compiled-function))))
+
+(defun init-ccl-function (fn bslambda)
   (setf (ccl-function-bslambda fn) bslambda)
-  (setf (ccl-function-bits fn) bits)
-  (setf (ccl-function-name fn) (cadr bslambda))
+  (setf (ccl-function-native-fn fn) nil)
+  (setf (uvector-data fn)
+        (let* ((name (cadr bslambda))
+               (argspecs (third bslambda))
+               (bits (car (last argspecs)))
+               (data (list name (logandc2 bits (ash 1 $lfbits-noname-bit)))))
+          ;; Support for lfun-keyvect
+          (when (and (logbitp $lfbits-keys-bit bits)
+                     (or (logbitp $lfbits-method-bit bits)
+                         (and (not (logbitp $lfbits-gfn-bit bits))
+                              (not (logbitp $lfbits-cm-bit bits)))))
+            (let* ((keyspecs (cdr (fifth argspecs)))
+                   (keys (map 'vector #'car keyspecs)))
+              (push (make-uvector subtag-simple-vector keys) data)))
+          (apply 'vector data)))
   fn)
 
 (defun make-ccl-closure (inner-fn vcells)
@@ -82,25 +172,23 @@
                     (logior (ash 1 $lfbits-noname-bit)
                             (ash 1 $lfbits-trampoline-bit))))
     (%make-ccl-function :subtag subtag-function
+                        :bslambda 'closure
                         :data vec
                         :native-fn #'call-closure)))
 
 (defun call-closure (env self args)
+  ;; Env is the parent env, self is the CLOSURE OBJECT
   (let* ((vec (ccl-function-data self))
          (last (1- (length vec))))
     (assert (logbitp $lfbits-trampoline-bit (svref vec last)))
     (loop for index from (1- last) above 0 do (push (svref vec index) args))
-    (apply-func-in-environment env (svref vec 0) args)))
-
-(defun make-ccl-function (bslambda bits)
-  (init-ccl-function (cons-ccl-function) bslambda bits))
+    ;; EXCEPT DO WE WANT SELF TO BE the closure?
+    (apply-in-environment env (svref vec 0) args)))
 
 (defun ccl-set-macro-function (sym fn)
   (check-type sym ccl-symbol)
   (check-type fn ccl-function)
-  (setf (sym-func sym) (make-ccl-uvector :subtag (typekey-subtag :simple-vector)
-                                         :data (vector 'macro-apply-code
-                                                       fn)))
+  (setf (sym-func sym) (make-uvector subtag-simple-vector (vector *macro-apply-code* fn)))
   fn)
 
 (defun ensure-func (fn-or-sym)
@@ -110,7 +198,7 @@
     fn))
 
 (defun ccl-funcall (sym-or-func &rest args)
-  (apply-func-in-environment nil (ensure-func sym-or-func) args))
+  (apply-in-environment nil sym-or-func args))
 
 (defun record-debug-info (name doc-info native-type-sym)
   (declare (ignore name doc-info native-type-sym))
@@ -125,12 +213,15 @@
   nil)
 
 
-;; called for fasloading and also runtime.  Should be pretty similar to the actual
-;; %defun, since will keep getting called for fasloaded functions even after bootstrap.
-;; Or maybe should replace...
+(defvar *deferred-level-0-calls* nil)
+
+;; called for fasloading.  TODO: make loader ccl-funcall ccl %defun, and make a boostrapping
+;;  %defun which will get called until the real one is defined, which is pretty early in level-0.
 (defun %defun (func doc)
   (check-type func ccl-function)
-  (let ((sym (ccl-function-name func)))
-    (check-type sym ccl-symbol) ;; no setf functions in level-0
-    (record-debug-info sym doc 'function)
-    (setf (sym-func sym) func)))
+  (if *deferred-level-0-calls* ;; we're loading all the level-0 defuns, so don't have defun yet.
+    (let ((sym (ccl-function-name func)))
+      (check-type sym ccl-symbol) ;; no setf functions in level-0
+      (record-debug-info sym doc 'function)
+      (setf (sym-func sym) func))
+    (ccl-funcall (ccl'%defun) func doc)))

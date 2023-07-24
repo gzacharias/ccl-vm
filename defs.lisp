@@ -47,28 +47,31 @@
 (defconstant ivector-subtags-64-bit 10)
 
 ;; Define all the subtags from x86, but we won't be using them all!
-(defparameter *uvector-subtags* nil)
+(defparameter *uvector-subtag-typekeys* (make-array 256 :initial-element nil))
 
 (defmacro subtag-typekey (subtag)
-  `(or (car (rassoc ,subtag *uvector-subtags*)) (error "Unknown subtag")))
+  `(or (svref *uvector-subtag-typekeys* ,subtag) (error "Unknown subtag")))
+
 (defmacro typekey-subtag (typekey)
-  `(or (cdr (assoc ,typekey *uvector-subtags*)) (error "Unknown typekey")))
+  `(or (position ,typekey *uvector-subtag-typekeys*) (error "Unknown typekey")))
+
 
 (defun gvector-type-p (subtag-or-typekey)
   (let* ((subtag (if (fixnump subtag-or-typekey)
                    subtag-or-typekey
                    (typekey-subtag subtag-or-typekey)))
          (tag (logand subtag #xF)))
-    (or (eq tag gvector-subtags-0) (eq tag gvector-subtags-1))))
+    (when (or (eq tag gvector-subtags-0) (eq tag gvector-subtags-1)) subtag)))
 
 (defun ivector-type-p (subtag-or-typekey)
   (let* ((subtag (if (fixnump subtag-or-typekey)
                    subtag-or-typekey
                    (typekey-subtag subtag-or-typekey)))
          (tag (logand subtag #xF)))
-    (or (eq tag ivector-subtags-misc)
-        (eq tag ivector-subtags-32-bit)
-        (eq tag ivector-subtags-64-bit))))
+    (when (or (eq tag ivector-subtags-misc)
+              (eq tag ivector-subtags-32-bit)
+              (eq tag ivector-subtags-64-bit))
+      subtag)))
 
 
 #+hemlock (hemlock::defindent "define-subtags" 1)
@@ -86,7 +89,7 @@
                 (setq index new-index)))
          do (assert (<= index #xF00))
          collect `(defconstant ,name (+ ,code ,index))
-         collect `(push (cons ,key ,name) *uvector-subtags*))))
+         collect `(setf (svref *uvector-subtag-typekeys* ,name) ,key))))
 
 (define-subtags gvector-subtags-0
   subtag-symbol
@@ -109,6 +112,7 @@
   subtag-xfunction
   subtag-lock
   subtag-instance
+  subtag-lexpr-vector   ;; Just for us!
   (subtag-vector-header 10)
   subtag-simple-vector)
 
@@ -119,7 +123,7 @@
   (subtag-complex-double-float-vector 9)
   subtag-signed-16-bit-vector 
   subtag-unsigned-16-bit-vector
-  subtag-signed-8-bit-vector
+  (subtag-signed-8-bit-vector 13)
   subtag-unsigned-8-bit-vector
   subtag-bit-vector)
 
@@ -174,14 +178,19 @@
 (defparameter *illegal-marker* 'illegal-marker)
 
 (defparameter *unbound-function* 'unbound-function)
+(defparameter *macro-apply-code* 'macro-apply-code)
+
+;; errors
+(defconstant $xnofinfunction 9)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; random utils
 
+
 (defun fixnump (x) (typep x 'fixnum))
 
 (declaim (inline require-type))
-(defun require-type (obj type)
+(defun require-type (obj type) ;; native
   (assert (typep obj type) (obj))
   obj)
 
@@ -191,4 +200,10 @@
 (defmacro cassert (form)
   `(unless ,form (cerror "Ignore it" "assert failed ~s" ',form)))
 
-
+#+hemlock (hemlock::defindent "named-function" 2)
+(defmacro named-function (name arglist &body body)
+  (declare (ignorable name))
+  (when (and (null body) (eq (car arglist) 'lambda))
+    (setq body (cddr arglist) arglist (cadr arglist)))
+  #+ccl `(ccl:nfunction ,name (lambda ,arglist ,@body))
+  #-ccl `(function (lambda ,arglist ,@body)))

@@ -30,21 +30,50 @@
     ))
 
 (defun load-cvm (&key (verbose t))
+  (ensure-directories-exist "cvm:fasls;")
   (with-compilation-unit ()
     (loop for file in *ccl-vm-files*
-      do (compile-file file :verbose verbose :load t))))
+      do (compile-file file
+                       :output-file (make-pathname :name (pathname-name file) :defaults "cvm:fasls;")
+                       :verbose verbose
+                       :load t))))
 
 (load-cvm)
 
-;;;;; For testing only
-#+ccl
-(defun ccl::test-load ()
-  ;; Don't really understand the intended way of doing this.  Any attempt to
-  ;; use a target ends up calling FIND-BACKEND, but there is no cvm backend until
-  ;; these files are loaded, so just do it.
-  ;(load "ccl:compiler;cvm;cvm-arch.lisp")
-  ;(load "ccl:compiler;cvm;cvm-backend.lisp")
-  (load-cvm)
-  (let ((files (sort (directory "ccl:level-0;cvmsrcs;*.cvmsrc") #'string-lessp :key #'pathname-name)))
-    (ccl-vm::cvmload-level-0 files)))
+(defun ccl::h (val)
+  (format t "#x~x" val)
+  val)
+
+(defun ccl::show-lfun-bits (lfbits)
+  (loop with prefix = ""
+    for (flag bit) in '(("nonnullenv" 0)
+                        ("keys" 1)
+                        ;("numopt (byte 5 2))
+                        ("restv" 7)
+                        ;("numreq (byte 6 8))
+                        ("optinit" 14)
+                        ("rest" 15)
+                        ("aok" 16)
+                        ;("numinh (byte 6 17))
+                        ("info" 23)
+                        ("trampoline" 24)
+                        ("code-coverage" 25)
+                        ;; ("cm" 26)         ; combined-method SAME AS NEXTMETH
+                        ("nextmeth" 26)
+                        ("gfn" 27)
+                        ("nextmeth-with-args" 27)
+                        ("method" 28)
+                        ("noname" 29))
+    do (when (logbitp bit lfbits)
+         (when (and (equal flag "nextmeth")
+                    (not (logbitp ccl::$lfbits-method-bit lfbits)))
+           (setq flag "cm"))
+         (format t "~a~a" prefix flag)
+         (setq prefix " "))))
+
+(defmacro ccl::dfunc (sym)
+  (when (ccl::quoted-form-p sym) (setq sym (cadr sym)))
+  `(pprint (fourth (ccl-vm::ccl-function-bslambda (ccl-vm::sym-func (ccl-vm::ccl ',sym))))))
+
+(import '(ccl::show-lfun-bits ccl::h ccl::dfunc) :ccl-vm)
 

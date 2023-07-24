@@ -1,8 +1,5 @@
 (in-package :ccl-vm)
 
-;;;; *** TODO: there are too many forward references in level-0. 
-(defvar *deferred-level-0-calls* nil)
-
 ;; Don't load nfasload!  We don't plan to use it, we just want to be able to
 ;;  use the compiler and we'll be using our loader.
 
@@ -14,16 +11,7 @@ defines find-package, set-package, pkg-arg, register-package-ref as possibly
 Ok, wait, l1-symhash uses stuff:
   %htab-add-symbol
   %find-symbol
-Maybe others.  But nobody else uses pkg.itab/pkg.etab!
-
-(defvar *package-refs*)
-(setq *package-refs* (make-hash-table :test #'equal))
-(defvar *package-refs-lock*)
-(setq *package-refs-lock* (make-lock))
-
-(dolist (p %all-packages%)
-  (dolist (name (pkg.names p))
-    (setf (package-ref.pkg (register-package-ref name)) p)))
+Maybe others.  who else uses pkg.itab/pkg.etab!
 
 (let* ((force-export-packages (list *keyword-package*))
        (force-export-packages-lock (make-lock)))
@@ -40,59 +28,133 @@ Maybe others.  But nobody else uses pkg.itab/pkg.etab!
       (if (memq pkg force-export-packages)
         t))))
 |#
+;;;;; For testing only
+(import 'ccl::test-load :ccl-vm)
+(import 'ccl::test-vm :ccl-vm)
+(defun ccl::test-load ()
+  ;; Don't really understand the intended way of doing this.  Any attempt to
+  ;; use a target ends up calling FIND-BACKEND, but there is no cvm backend until
+  ;; these files are loaded, so just do it.
+  ;(load "ccl:compiler;cvm;cvm-arch.lisp")
+  ;(load "ccl:compiler;cvm;cvm-backend.lisp")
+  (cl-user::load-cvm)
+  (cvmload-ccl))
 
-(defun cvmload-level-0 (files)
-  (let ((calls
-         (loop for file in files
-           unless (string-equal (pathname-name file) "nfasload")
-           collect (let ((*deferred-level-0-calls* (list file)))
-                     (cvmload file)
-                     (nreverse *deferred-level-0-calls*)))))
-    (FORMAT T "~&LOADED ~s files, HAVE ~s calls" 
-            (length calls)
-            (loop for info in calls sum (length (cdr info))))
-   ;; Some stuff xfasload inits
+(defvar *CCL-DIRECTORY*)
+
+(defun cvmload-ccl ()
+  ;; Load level-0
+  (let* ((files (sort (directory "ccl:cvmsrcs;level-0;*.cvmsrc") #'string-lessp :key #'pathname-name))
+         (calls (loop for file in files
+                  unless (string-equal (pathname-name file) "nfasload")
+                  nconc (let ((*deferred-level-0-calls* (list t)))
+                          (cvmload file)
+                          (loop for call in (cdr (nreverse *deferred-level-0-calls*))
+                            collect (list file call))))))
+    ;; However the real load happens, have to record the ccl directory so the vm can find it.
+    (SETQ *CCL-DIRECTORY* (truename "ccl:"))
+    
+    ;; Some stuff xfasload inits
+    ;; Most of this could be done before loading level-0!
+    (%defvar (ccl-symbol '*package*) () 'variable *ccl-pkg*)
     (%defvar (ccl '*ccl-package*) () 'variable *ccl-pkg*)
     (%defvar (ccl '*common-lisp-package*) () 'variable *cl-pkg*)
     (%defconstant (ccl '%unbound-function%) *unbound-function*)
-    (%defvar (ccl '*package*) () 'variable *ccl-pkg*)
     (%defvar (ccl '*keyword-package*) () 'variable *keyword-pkg*)
     (%defvar (ccl'*gc-event-status-bits*) () 'variable 0)
     (%defvar (ccl '%toplevel-catch%) () 'variable (ccl :toplevel))
     ; %closure-code%, %macro-code%, %builtin-functions%
+    ;; Macros sym-func is a vector #(<macro-code> fn)
+    (%defvar (ccl '%macro-code%) () 'variable *macro-apply-code*)
     ;;(setf (xload-symbol-value (xload-copy-symbol '*xload-cold-load-documentation*))
     ;;      (xload-save-list (setq *xload-cold-load-documentation*
     ;;                             (nreverse *xload-cold-load-documentation*))))
-    (loop for info in calls
-      do (format t "~2&~s CALLS FOR FILE ~s" (length (cdr info)) (car info))
-      do (loop for fn in (cdr info) for index upfrom 1
-           do (format t "~&  Call #~s" index)
-           do (ccl-funcall fn)))
-
+    ;; default to unshared hash tables, lock-free-puthash seems to get an infinite loop **** TRACK THIS DOWN
+    ;;  Have to do this before %documentation is initialized, in level-0!
+    (setf (sym-value (ccl '*shared-hash-table-default*)) nil)
+    (setf (sym-value (ccl '*current-process*)) 1234) ;; needed for non-shared hash tables.
+    
+    (loop for (file fn) in calls as index upfrom 1
+      do (format t "~& Call #~s (from ~s) " index file)
+      do (ccl-funcall fn))
+    
     ;;;; TODO******* So this needs to somehow come in from the compiler, because that's who knowns where it puts it.
     (%defvar (ccl '*xload-startup-file*) () 'variable (ccl "level-1.cvmsrc"))
     (%defvar (ccl '*openmcl-svn-revision*) () 'variable nil) ;; (local-vc-revision) -- SO THIS NEEDS TO BE FROM COMPILE/XLOAD time again
     (%defvar (ccl '*optional-features*) () 'variable nil) ;(mapcar 'ccl-symbol CCL::*BUILD-TIME-OPTIONAL-FEATURES*)
-
+    
     (unbootstrap-documentation)
     ;;(unbootstrap-packages)
     ;;(%fasload *xload-startup-file*))
-    ;;; FIrst few files.
-    ;(l1-load "l1-cl-package")
-    ;(l1-load "l1-utils")
-    ;(l1-load "l1-init")
-    ;(l1-load "l1-symhash")
-    ;(l1-load "l1-numbers")
-    ;(l1-load "l1-aprims")
+    ;;  Here's what level-1.lisp would load
+    (format t "~&Level-0 loaded~%")
+    
+    ;; Here might also want to replace some l0-hash table fns with speedier versions?
+    
+    
+    ;; (l1-load "l1-cl-package") - just does CL package, which we pre-allocated.
+    (pretend-fasload "l1-utils")
+    (pretend-fasload "l1-init")
+    (pretend-fasload "l1-symhash")
+    (pretend-fasload "l1-numbers")
+    (pretend-fasload "l1-aprims")
+    ;; (l1-load "x86-callback-support")
+    (pretend-fasload "l1-callbacks")
+    (pretend-fasload "l1-sort")
+    (pretend-fasload "lists")
+    (pretend-fasload "sequences")
+    (pretend-fasload "l1-dcode")
+    (pretend-fasload "l1-clos-boot")
+    (pretend-fasload "hash")
+    (pretend-fasload "l1-clos")
+    (pretend-fasload "defstruct")
+    (pretend-fasload "dll-node")
+    (pretend-fasload "l1-unicode")
+    (pretend-fasload "l1-streams")
+    ;; Ok this does defstruct which calls definition-environment which is defined in l1-readloop.
+    ;; how does this ever work?  Ok, it only seems to call it on shared-resource-request,
+    ;; which is the first one that does an :include
+    (pretend-fasload "linux-files")
+    (pretend-fasload "chars")
+    (pretend-fasload "l1-files")
+    (let ((provide (sym-func (ccl 'provide))))
+      (ccl-funcall provide (ccl-string "SEQUENCES"))
+      (ccl-funcall provide (ccl-string "DEFSTRUCT"))
+      (ccl-funcall provide (ccl-string "CHARS"))
+      (ccl-funcall provide (ccl-string "LISTS"))
+      (ccl-funcall provide (ccl-string "DLL-NODE")))
+    (pretend-fasload "l1-typesys")
+    (pretend-fasload "sysutils")
+    ;; (l1-load "x86-threads-utils")
+    ;; Really should skip processes if skip threads...
+    (pretend-fasload "l1-lisp-threads")
+    (pretend-fasload "l1-application")
+    (pretend-fasload "l1-processes")
+    (pretend-fasload "l1-io")
+    (pretend-fasload "l1-reader")
+    (pretend-fasload "l1-readloop")
+    (pretend-fasload "l1-readloop-lds")
+    (pretend-fasload "l1-error-system")
+    (pretend-fasload "l1-events")
+    ;; (l1-load "x86-trap-support")
+    (pretend-fasload "l1-format")
+    (pretend-fasload "l1-sysio")
+    (pretend-fasload "l1-pathnames")
+    (pretend-fasload "l1-boot-lds")
+    (pretend-fasload "l1-boot-1")
+    (pretend-fasload "l1-boot-2")
+    (pretend-fasload "l1-boot-3")
+    
+    
     ))
 
+;; called from lap-%fasload.
+(defun pretend-fasload (filename)
+  (let ((file (make-pathname :name (pathname-name filename) :defaults "ccl:cvmsrcs;.cvmsrc")))
+    (if (probe-file file)
+      (progn (cvmload file) t)
+      (progn (format t "~2&SKIPPING ~s~2%" filename) nil))))
 
-    ;; ** ONCE SWITCH TO native packages, lookup won't be so fast.  Maybe have a cache of
-    ;; all the stuff that goes through ccl-symbol, don't need to support shadowing and
-    ;; such just to run the compiler.
-
-
-  
 
 (defun cvmload  (file)
   (assert (equal (pathname-type file) "cvmsrc"))
@@ -104,6 +166,7 @@ Maybe others.  But nobody else uses pkg.itab/pkg.etab!
     ;;; TODO: need to ccl-bind *package* so can then set it.
     (declare (special *loader-table*))
     (load file)))
+
 
 ;; a CVMSRC file is a bunch of toplevel calls to these $fasl functions.  The arguments
 ;; (once evaluated in the host lisp) are BSEVAL expressions, can then be BSEVAL'ed to yield
@@ -158,7 +221,6 @@ Maybe others.  But nobody else uses pkg.itab/pkg.etab!
       (push fn *deferred-level-0-calls*)
       (ccl-funcall fn))))
 
-
 (defun $fasl-defmacro (fn doc)
   (fasl-trace "~s ~s ~s" '$fasl-defmacro fn doc)
   (check-type fn ccl-function)
@@ -166,16 +228,6 @@ Maybe others.  But nobody else uses pkg.itab/pkg.etab!
     (check-type sym ccl-symbol)
     (record-debug-info sym doc 'function)
     (ccl-set-macro-function sym fn)))
-
-#|
-;;This is all we need for loading level-0, aside from toplevel fns, to get all the arguments.
-$bs-package $bs-symbol
-$bs-cons-function
-$bs-init-function $bs-istruct-cell
-$bs-quote $bs-make-uvector
- $bs-init-uvector
-$bs-gvector $bs-uvector $bs-eval)
-|#
 
 (defun $fs-unbound-marker () *unbound-marker*)
 (defun $fs-slot-unbound-marker () *slot-unbound-marker*)
@@ -188,7 +240,9 @@ $bs-gvector $bs-uvector $bs-eval)
 
 (defun $fs-symbol (name pkg)
   (fasl-trace "   ~s ~s ~s" '$fs-symbol name pkg)
-  (find-or-make-sym name pkg))
+  (if (null pkg)
+    (make-ccl-symvector name)
+    (find-or-make-sym name pkg)))
 
 (defun $fs-string (string)
   (check-type string string)
@@ -197,11 +251,11 @@ $bs-gvector $bs-uvector $bs-eval)
 (defun $fs-make-uvector (type-key size)
   (fasl-trace "   ~s ~s ~s" '$fs-make-uvector type-key size)
   (check-type size fixnum)
-  (make-uvector size (typekey-subtag type-key)))
+  (alloc-uvector size (typekey-subtag type-key)))
 
 (defun $fs-init-bslambda (bslambda)
   ;; We $BS-QUOTED the name and the keywords so as do get the fasdumper to do the right thing,
-  ;; but don't want to have to always bseval them.
+  ;; but don't want to have to always eval them.
   (flet ((unquot (thing)
            (if (and (consp thing) (consp (cdr thing)) (null (cddr thing))
                     (eq (car thing) '$bs-quote)
@@ -209,8 +263,8 @@ $bs-gvector $bs-uvector $bs-eval)
                     )
              (cadr thing)
              (error "Expected a quoted object not ~s" thing))))
-    (destructuring-bind (name (inh req opt rest keys) body num) (cdr bslambda)
-      (declare (ignore inh req opt rest body num))
+    (destructuring-bind (name (inh req opt rest keys bits) body num) (cdr bslambda)
+      (declare (ignore inh req opt rest bits body num))
       (setf (cadr bslambda) (unquot name))
       (loop for info in (cdr keys)
         do (destructuring-bind (key var init supp) info
@@ -223,16 +277,15 @@ $bs-gvector $bs-uvector $bs-eval)
   (fasl-trace "   ~s" '$fs-cons-function)
   (cons-ccl-function))
 
-(defun $fs-init-function (fn bslambda bits)
+(defun $fs-init-function (fn bslambda)
   (let ((*print-length* 3) (*print-level* 3))
-  (fasl-trace "   ~s ~s ~s ~s" '$fs-init-function fn bslambda bits))
-  (init-ccl-function fn bslambda bits))
+  (fasl-trace "   ~s ~s ~s" '$fs-init-function fn bslambda))
+  (init-ccl-function fn bslambda))
 
 (defun $fs-init-uvector (uvec &rest values)
   (fasl-trace "   ~s ~s ~s" '$fs-init-uvector uvec values)
-  (let ((vec (uvector uvec)))
-    ;; so the values should be like going through $BS-QUOTE, because they could be numbers, e.g.
-    ;; bignums.
+  (let ((vec (uvector-data uvec)))
+    ;; so the values should be like going through $BS-QUOTE, because they could be e.g. bignums.
     (assert (eq (length vec) (length values)))
     (loop for val in values as index upfrom 0
       do (setf (aref vec index) (ccl val)))
@@ -250,25 +303,32 @@ $bs-gvector $bs-uvector $bs-eval)
 
 (defun $fs-eval (expr)
   (fasl-trace "   ~s ~s" '$fs-eval expr)
-  (break "NIY")
-  'eval-not-implemented-yet)
+  (when *deferred-level-0-calls*
+    (error "$fs-eval in level-0 ~s" expr))
+  (labels ((simple-eval (arg)
+           (cond ((typep arg 'ccl-symvector) (sym-value arg))
+                 ((atom arg) arg)
+                 ((eq (car arg) (ccl'quote))
+                  (assert (eql (length arg) 2))
+                  (cadr arg))
+                 ((typep (car arg) 'ccl-symvector)
+                  ;; this will err out on macros or special forms
+                  (apply-in-environment nil (car arg) (mapcar #'simple-eval (cdr arg))))
+                 (t (error "Don't know how to eval ~s" expr)))))
+    (simple-eval expr)))
 
 ;; like $fasl-funcall but for value, it's used in load-time values.
-(defun $fs-funcall (fn-expr)
-  (fasl-trace "   ~s ~s" '$fs-funcall fn-expr)
-  (break "NIY")
-  'funcall-not-implemented-yet)
+;;; I BELEIVE *ALL* calls to this a find-class-cell, maybe its worth breaking out,
+;;; even just to call out to ccl.
+(defun $fs-funcall (fn)
+  (fasl-trace "   ~s ~s" '$fs-funcall fn)
+  ;(FORMAT *trace-OUTPUT* "~&$FS-FUNCALL ~s" (ccl-function-bslambda fn))
+  (when *deferred-level-0-calls*
+    (error "$fs-funcall in level-0 ~s" fn))
+  (ccl-funcall fn))
 
-(defvar *istruct-cells-sym*  (ccl '*istruct-cells*))
-(%defvar *istruct-cells-sym* () 'variable nil)
 
 (defun $fs-istruct-cell (sym)
   (fasl-trace "   ~s ~s" '$fs-istruct-cell sym)
   (check-type sym ccl-symbol)
-  ;; Could switch to use ccl register-istruct-cells once it's defined, but why bother..
-  ;; (if (fboundp (ccl'register-istruct-cell)) (ccl-funcall (ccl'register-istruct-cell) sym) ...)
-  (let ((alist (sym-value *istruct-cells-sym*)))
-    (or (assoc sym alist)
-        (let ((pair (cons sym nil)))
-          (setf (sym-value *istruct-cells-sym*) (cons pair alist))
-          pair))))
+  (register-istruct-cell sym))
