@@ -59,7 +59,7 @@
 
 
 (defun make-ccl-symvector (pname &optional (flags 0) (value *unbound-marker*))
-  (check-type pname ccl-simple-base-string)
+  (check-type pname ccl-simple-string)
   (%make-ccl-symvector :subtag subtag-symbol
                        :data (vector pname   ;; pname
                                      value  ;;vcell
@@ -93,29 +93,29 @@
       symvector)))
 
 (defun sym-pname (sym)
-  (svref (uvector-data (sym-symvector sym)) sym.pname))
+  (gvref (sym-symvector sym) sym.pname))
 
 (defun sym-native-pname (sym)
   (native-string (sym-pname sym)))
 
 ;; Since we're single-threaded, there is only one value, and that is the global value!
 (defun %symptr-value (symvec)
-  #+vm-threads (let ((index (svref (uvector-data symvec) sym.binding-index)))
+  #+vm-threads (let ((index (gvref symvec sym.binding-index)))
                  (if (and (< index (length *level-0-special-bindings-vector*))
                           (not (eq *no-thread-local-binding-marker*
                                    (aref *level-0-special-bindings-vector* index))))
                    (svref *level-0-special-bindings-vector* index)
-                   (svref (uvector-data symvec) sym.vcell)))
-  #-vm-threads (svref (uvector-data symvec) sym.vcell))
+                   (gvref symvec sym.vcell)))
+  #-vm-threads (gvref symvec sym.vcell))
 
 (defun %set-symptr-value (symvec value)
-  #+vm-threads (let* ((index (svref (uvector-data symvec) sym.binding-index)))
+  #+vm-threads (let* ((index (gvref symvec sym.binding-index)))
                  (if (and (< index (length *special-bindings-vector*))
                           (not (eq *no-thread-local-binding-marker*
                                    (aref *special-bindings-vector* index))))
                    (setf (aref *special-bindings-vector* index) value)
-                   (setf (svref (uvector-data symvec) sym.vcell) value)))
-  #-vm-threads (setf (svref (uvector-data symvec) sym.vcell) value))
+                   (setf (gvref symvec sym.vcell) value)))
+  #-vm-threads (setf (gvref symvec sym.vcell) value))
 
 (defun sym-boundp (sym)
   (not (eq (%symptr-value (sym-symvector sym)) *unbound-marker*)))
@@ -140,7 +140,7 @@
 (defun %defvar (sym doc def-type &optional (val nil val-p))
   (check-type sym ccl-symvector)
   (record-debug-info sym doc def-type)
-  (let* ((vec (uvector-data sym)))
+  (let* ((vec (gvector-data sym)))
     (setf (svref vec sym.bits)
           (logior (ash 1 $sym_vbit_special)
                   (svref vec sym.bits))))
@@ -149,7 +149,7 @@
 
 (defun %defconstant (sym val &optional doc)
   (%defvar sym doc 'constant val)
-  (let* ((vec (uvector-data sym)))
+  (let* ((vec (gvector-data sym)))
     (setf (svref vec sym.bits)
           (logior (ash 1 $sym_vbit_constant)
                   (svref vec sym.bits)))))
@@ -158,13 +158,13 @@
 
 (defun sym-fboundp (sym)
   (let* ((symvec (sym-symvector sym))
-         (fn (svref (uvector-data symvec) sym.fcell)))
+         (fn (gvref symvec sym.fcell)))
     (unless (eq fn *unbound-function*)
       fn)))
     
 (defun sym-func (sym)
   (let* ((symvec (sym-symvector sym))
-         (fn (svref (uvector-data symvec) sym.fcell)))
+         (fn (gvref symvec sym.fcell)))
     (if (eq fn *unbound-function*)
       (error "Unfbound variable ~s" sym)
       fn)))
@@ -172,27 +172,27 @@
 ;; %fhave.  Doesn't check the value, so can use it to set macros and such
 (defun (setf sym-func) (val sym)
   (let* ((symvec (sym-symvector sym)))
-    (setf (svref (uvector-data symvec) sym.fcell) val)))
+    (setf (gvref symvec sym.fcell) val)))
 
 #+vm-threads
 (defun ensure-binding-index (sym)
   (let* ((symvec (sym-symvector sym))
-         (index (svref (uvector-data symvec) sym.binding-index))
-         (bits (svref (uvector-data symvec) sym.bits)))
+         (index (gvref symvec sym.binding-index))
+         (bits (gvref symvec sym.bits)))
     (if (or (logbitp $sym_vbit_global bits)      ;; globals don't need binding index.
             (logbitp $sym_vbit_constant bits))
       (unless (zerop index)
         (setf (aref *special-bindings-vector* index) *no-thread-local-binding-marker*)
-        (setf (svref (uvector-data sym) sym.binding-index) 0))
+        (setf (gvref sym sym.binding-index) 0))
       (when (zerop index)
-        (setf (svref (uvector-data symvec) sym.binding-index)
+        (setf (gvref symvec sym.binding-index)
               (vector-push-extend *no-thread-local-binding-marker*
                                   *special-bindings-vector*
                                   100))))))
 
 (defun sym-pkg (sym)
   (setq sym (sym-symvector sym))
-  (let ((pp (svref (uvector-data sym) sym.pkg-predicate)))
+  (let ((pp (gvref sym sym.pkg-predicate)))
     (if (consp pp) (car pp) pp)))
 
 
@@ -208,14 +208,62 @@
 (defconstant pkg.lock 6)
 (defconstant pkg.intern-hook 7)
 
-(defmethod print-uvector-data ((type (eql :package)) obj stream)
+(defun %new-htab (size)
+  (list* (make-uvector subtag-simple-vector (make-array size)) 0 (make-hash-table :test 'equal)))
+
+(defun %itab-get (hashkey pkg-vec)
+  (gethash hashkey (cddr (svref pkg-vec pkg.itab))))
+
+(defun %etab-get (hashkey pkg-vec)
+  (gethash hashkey (cddr (svref pkg-vec pkg.etab))))
+
+(defun %htab-add (hashkey htab sym)
+  (destructuring-bind (uvec count . hash) htab
+    (let ((vec (gvector-data uvec)))
+      (when (eql count (length vec))
+        (setf (uvector-data uvec)
+              (setq vec (adjust-array vec  (+ count 100) :initial-element 0))))
+      (let ((newpos (position 0 vec)))
+        (assert newpos)
+        (setf (svref vec newpos) sym)
+        (setf (cadr htab) (1+ count)))
+      (setf (gethash hashkey hash) sym))))
+
+(defun %itab-add (hashkey pkg-vec sym)
+  (%htab-add hashkey (svref pkg-vec pkg.itab) sym))
+
+(defun %etab-add (hashkey pkg-vec sym)
+  (%htab-add hashkey (svref pkg-vec pkg.itab) sym))
+
+(defun %htab-rem (hashkey htab sym)
+  (destructuring-bind (uvec count . hash) htab
+    ;; The vector is there for iteration, so don't shift its contents around.
+    (let* ((vec (gvector-data uvec))
+           (sympos (position sym vec)))
+      (if (not sympos) ;; shouldn't happen but at least make sure we're consistent
+        (assert (not (gethash hashkey hash)))
+        (progn
+          (setf (svref vec sympos) 0)
+          (setf (cadr htab) (1- count))
+          (remhash hashkey hash))))))
+
+(defun %itab-rem (hashkey pkg-vec sym)
+  (%htab-rem hashkey (svref pkg-vec pkg.itab) sym))
+
+(defun %etab-rem (hashkey pkg-vec sym)
+  (%htab-rem hashkey (svref pkg-vec pkg.etab) sym))
+
+
+(defmethod print-uvector-data ((type (eql :package)) obj stream) (print-package-data obj stream))
+
+(defun print-package-data (obj stream)
   (print-string-data (pkg-name obj) stream))
 
 (defun pkg-name (pkg)
-  (car (svref (uvector-data pkg) pkg.names)))
+  (car (gvref pkg pkg.names)))
 
 (defun pkg-name-p (name pkg)
-  (member name (svref (uvector-data pkg) pkg.names) :test 'uvector-equal))
+  (member name (gvref pkg pkg.names) :test #'uvector-equal))
 
 
 (def-early-sym *all-packages-sym* "%ALL-PACKAGES%" (ash 1 $sym_vbit_special) nil)
@@ -237,7 +285,7 @@
 
 (defun pkg-arg (pkg-arg &optional (errorp t))
   (cond ((ccl-package-p pkg-arg)
-         (unless (svref (uvector-data pkg-arg) pkg.names)
+         (unless (gvref pkg-arg pkg.names)
            (error "Package ~s is deleted" pkg-arg))
          pkg-arg)
         (t
@@ -245,7 +293,7 @@
            (setq pkg-arg (sym-pname pkg-arg)))
          ;; should allow non-simple-strings         
          ; (setq pkg-arg (ensure-simple-string pkg-arg))
-         (check-type pkg-arg ccl-simple-base-string)
+         (check-type pkg-arg ccl-simple-string)
          (let* ((nicknames-fn (sym-fboundp (ccl 'package-%local-nicknames)))
                 (local-nicknames (and nicknames-fn
                                       (ccl-funcall nicknames-fn (sym-value (ccl '*package*))))))
@@ -262,63 +310,63 @@
                        (car (setq *package-refs*
                                   (cons (cons name (make-istruct *package-ref-sym* name nil))
                                         *package-refs*))))))
-         (vec (uvector-data ref)))
+         (vec (gvector-data ref)))
     (or (svref vec 2)
         (setf (svref vec 2) pkg))
     ref))
 
 (defun find-sym-in-pkg (name pkg)
-  (check-type name ccl-simple-base-string)
+  (check-type name ccl-simple-string)
   (check-type pkg ccl-package)
   (let ((hashkey (native-string name)) ;; conses, but it's just for bootstrapping, who cares.
-        (pkg-vec (uvector-data pkg))
+        (pkg-vec (gvector-data pkg))
         (sym))
-    (if (setq sym (gethash hashkey (svref pkg-vec pkg.itab)))
+    (if (setq sym (%itab-get hashkey pkg-vec))
       (values (symvector-sym sym) :internal)
-      (if (setq sym (gethash hashkey (svref pkg-vec pkg.etab)))
+      (if (setq sym (%etab-get hashkey pkg-vec))
         (values (symvector-sym sym) :external)
         (if (setq sym (loop for p in (svref pkg-vec pkg.used)
-                        thereis (gethash hashkey (svref (uvector-data p) pkg.etab))))
+                        thereis (%etab-get hashkey (gvector-data p))))
           (values (symvector-sym sym) :inherited))))))
 
 (defun sym-in-pkg-p (name pkg)
   (nth-value 1 (find-sym-in-pkg name pkg)))
 
+
 (defun add-sym-to-pkg (sym pkg &optional (export-p nil))
   (declare (special *keyword-pkg*))
   (check-type sym ccl-symvector)
   (check-type pkg ccl-package)
-  (let ((old (svref (uvector-data sym) sym.pkg-predicate)))
-    ;; Probably don't need to support the type-predicate thing while bootstrapping?
+  (let ((old (svref (gvector-data sym) sym.pkg-predicate)))
     (if (consp old)
       (unless (car old) (setf (car old) pkg))
-      (unless old (setf (svref (uvector-data sym) sym.pkg-predicate) pkg))))
+      (unless old (setf (svref (gvector-data sym) sym.pkg-predicate) pkg))))
   (let* ((hashkey (sym-native-pname sym)))
-    (IF (eq pkg *keyword-pkg*)
-      (let ((sym-vec (uvector-data sym)))
-        (setf (gethash hashkey (svref (uvector-data pkg) pkg.etab)) sym)
+    (if (eq pkg *keyword-pkg*)
+      (let ((sym-vec (gvector-data sym)))
+        (%etab-add hashkey (gvector-data pkg) sym)
         (setf (svref sym-vec sym.vcell) (symvector-sym sym))
         (setf (svref sym-vec sym.bits)
               (logior (ash 1 $sym_vbit_special)
                       (ash 1 $sym_vbit_constant)
                       (svref sym-vec sym.bits))))
-      (if export-p ;; (OR FORCE-EXPORT-PACKAGE-p) - used in objc-bridge only.
-        (setf (gethash hashkey (svref (uvector-data pkg) pkg.etab)) sym)
-        (setf (gethash hashkey (svref (uvector-data pkg) pkg.itab)) sym))))
-  (assert (null (svref (uvector-data pkg) pkg.intern-hook)))
+      (if export-p ; (OR FORCE-EXPORT-PACKAGE-p) - used in objc-bridge only.
+        (%etab-add hashkey (gvector-data pkg) sym)
+        (%itab-add hashkey (gvector-data pkg) sym))))
+  (assert (null (svref (gvector-data pkg) pkg.intern-hook)))
   sym)
 
 (defun export-sym-from-pkg (sym pkg)
   (check-type sym ccl-symvector)
   (let* ((hashkey (sym-native-pname sym))
-         (pkg-vec (uvector-data pkg))
-         (foundsym (gethash hashkey (svref pkg-vec pkg.itab))))
+         (pkg-vec (gvector-data pkg))
+         (foundsym (%itab-get hashkey pkg-vec)))
     (when foundsym
       (assert (eq foundsym sym))
-      (remhash hashkey (svref pkg-vec pkg.itab)))
-    (if (setq foundsym (gethash hashkey (svref pkg-vec pkg.etab)))
+      (%itab-rem hashkey (gvector-data pkg) sym))
+    (if (setq foundsym (%etab-get hashkey pkg-vec))
       (assert (eq foundsym sym))
-      (setf (gethash hashkey (svref pkg-vec pkg.etab)) sym))))
+      (%etab-add hashkey (gvector-data pkg) sym))))
 
 (defun find-or-make-sym (name pkg)
   (multiple-value-bind (sym found-p) (find-sym-in-pkg name pkg)
@@ -329,8 +377,8 @@
 (defun initial-pkg (native-names use)
   (let* ((names (mapcar #'ccl-string native-names))
          (pkg-vec (vector
-                   (make-hash-table :test 'equal) ;; itab
-                   (make-hash-table :test 'equal) ;; etab
+                   (%new-htab 0) ;; itab
+                   (%new-htab 0) ;; etab
                    () ;; used
                    ()  ;; used-by
                    names ;; names
@@ -348,7 +396,7 @@
     (unwind-protect
         (loop for other in pkgs-to-use
           do (push other (svref pkg-vec pkg.used))
-          do (let ((other-vec (uvector-data other)))
+          do (let ((other-vec (gvector-data other)))
                (push other-vec added)
                (push pkg (svref other-vec pkg.used-by)))
           finally (setq done t))
@@ -405,6 +453,16 @@
             (progn
               (assert (eq (symbol-package symbol) *native-package*))
               (find-or-make-sym name *ccl-pkg*))))))))
+
+(defun native-symbol (sym)
+  (check-type sym ccl-symbol)
+  (let* ((pname (sym-native-pname sym))
+         (pkg (sym-pkg sym)))
+    (cond ((eq pkg *cl-pkg*) (intern pname :common-lisp))
+          ((eq pkg *keyword-pkg*) (intern pname :keyword))
+          ((eq pkg *ccl-pkg*) (intern pname *native-package*))
+          ((eq pkg *ffi-pkg*) (intern pname :ccl-ffi))
+          (t (error "Don't know how to nativize ~s" sym)))))
 
 (defun sym-keyword (sym)
   (assert (eq (sym-pkg sym) *keyword-pkg*))

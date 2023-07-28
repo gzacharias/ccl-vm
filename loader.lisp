@@ -140,12 +140,13 @@ Maybe others.  who else uses pkg.itab/pkg.etab!
     (pretend-fasload "l1-format")
     (pretend-fasload "l1-sysio")
     (pretend-fasload "l1-pathnames")
+    ;; *** make it so REQUIRE can find our files
+    (push (ccl "ccl:cvmsrcs;.cvmsrc")
+          (sym-value (ccl'*module-search-path*)))
     (pretend-fasload "l1-boot-lds")
     (pretend-fasload "l1-boot-1")
     (pretend-fasload "l1-boot-2")
     (pretend-fasload "l1-boot-3")
-    
-    
     ))
 
 ;; called from lap-%fasload.
@@ -153,7 +154,7 @@ Maybe others.  who else uses pkg.itab/pkg.etab!
   (let ((file (make-pathname :name (pathname-name filename) :defaults "ccl:cvmsrcs;.cvmsrc")))
     (if (probe-file file)
       (progn (cvmload file) t)
-      (progn (format t "~2&SKIPPING ~s~2%" filename) nil))))
+      (progn (format t "~&***SKIPPING ~s" filename) nil))))
 
 
 (defun cvmload  (file)
@@ -183,7 +184,7 @@ Maybe others.  who else uses pkg.itab/pkg.etab!
 
 (defun $fasl-set-package (str)
   (fasl-trace "~s ~s" '$fasl-set-package str)
-  (check-type str ccl-simple-base-string)
+  (check-type str ccl-simple-string)
   (let ((pkg (pkg-arg str)))
     (assert (eq pkg *ccl-pkg*))
     (setf (sym-value (ccl '*package*)) pkg)))
@@ -235,7 +236,7 @@ Maybe others.  who else uses pkg.itab/pkg.etab!
 
 (defun $fs-package (name)
   (fasl-trace "   ~s ~s" '$fs-package name)
-  (check-type name ccl-simple-base-string)
+  (check-type name ccl-simple-string)
   (pkg-arg name))
 
 (defun $fs-symbol (name pkg)
@@ -284,12 +285,10 @@ Maybe others.  who else uses pkg.itab/pkg.etab!
 
 (defun $fs-init-uvector (uvec &rest values)
   (fasl-trace "   ~s ~s ~s" '$fs-init-uvector uvec values)
-  (let ((vec (uvector-data uvec)))
-    ;; so the values should be like going through $BS-QUOTE, because they could be e.g. bignums.
-    (assert (eq (length vec) (length values)))
-    (loop for val in values as index upfrom 0
-      do (setf (aref vec index) (ccl val)))
-    uvec))
+  (assert (eq (uvsize uvec) (length values)))
+  (loop for val in values as index upfrom 0
+    do (setf (uvref uvec index) (ccl val)))
+  uvec)
 
 (defun $fs-make-array (native-key dims-list)
   (fasl-trace "   ~s ~s ~s" '$fs-make-array native-key dims-list)

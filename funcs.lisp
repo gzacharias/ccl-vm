@@ -62,7 +62,7 @@
            (func-name (ccl-function-name fn)))
           ((logbitp $lfbits-gfn-bit bits)
            (assert (eq (ccl-function-bslambda fn) 'gf))
-           (uvref (uvref fn gf.slots) sgf.name))
+           (gvref (gvref fn gf.slots) sgf.name))
           (t (ccl-function-name (ccl-closure-function fn))))))
 
 (defmethod print-uvector-data ((type (eql :function)) fn stream) (print-function-data fn stream))
@@ -120,7 +120,7 @@
   (loop while (logbitp $lfbits-trampoline-bit (ccl-function-bits fn))
     do (setq fn (svref (ccl-function-data fn) 0))
     do (when (eq (uvector-subtag fn) subtag-simple-vector) ;?
-         (setq fn (svref (uvector-data fn) 0)))
+         (setq fn (gvref fn 0)))
     do (assert (ccl-function-p fn)))
   fn)
 
@@ -147,7 +147,7 @@
 (defun init-ccl-function (fn bslambda)
   (setf (ccl-function-bslambda fn) bslambda)
   (setf (ccl-function-native-fn fn) nil)
-  (setf (uvector-data fn)
+  (setf (ccl-function-data fn)
         (let* ((name (cadr bslambda))
                (argspecs (third bslambda))
                (bits (car (last argspecs)))
@@ -199,6 +199,9 @@
 
 (defun ccl-funcall (sym-or-func &rest args)
   (apply-in-environment nil sym-or-func args))
+
+(defun ccl-apply (sym-or-func &rest args)
+  (apply-in-environment nil sym-or-func (apply #'list* args)))
 
 (defun record-debug-info (name doc-info native-type-sym)
   (declare (ignore name doc-info native-type-sym))

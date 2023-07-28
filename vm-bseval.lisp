@@ -7,14 +7,19 @@
 (defun bseval (form)
   (bseval-in-environment nil form))
 
-(defstruct (vcell (:constructor make-vcell (value)))
-  (value *unbound-marker* :type ccl-object))
+(def-uvector-subtype :value-cell (ccl-vcell (:constructor %make-ccl-vcell) (:subtag-conser nil)))
+
+(defun make-vcell (value)
+  (%make-ccl-vcell :subtag subtag-value-cell :data (vector value)))
+
+(defmacro vcell-value (vcell)
+  `(svref (ccl-vcell-data ,vcell) 0))
 
 ;; Don't ever need the parent, but it's useful for debugging as it gives a full backtrace.
 (defstruct bsenv
   (parent nil :type (or bsenv null) :read-only t)
   (self nil :read-only t)
-  (locals #() :type (simple-array vcell (*)) :read-only t))
+  (locals #() :type (simple-array ccl-vcell (*)) :read-only t))
 
 (defmethod print-object ((env bsenv) stream)
   (print-unreadable-object (env stream :type t :identity nil)
@@ -25,10 +30,10 @@
             (length (bsenv-locals env)))))
 
 (defun bsenv-lvcell (env var-index)
-  (require-type (svref (bsenv-locals env) var-index) 'vcell))
+  (require-type (svref (bsenv-locals env) var-index) 'ccl-vcell))
 
 (defun (setf bsenv-lvcell) (vcell env var-index)
-  (setf (svref (bsenv-locals env) var-index) (require-type vcell 'vcell)))
+  (setf (svref (bsenv-locals env) var-index) (require-type vcell 'ccl-vcell)))
 
 (defmacro bsenv-lbind (env var-index &optional init)
   ;; the init might need to reference the vcell (as in labels)
@@ -131,7 +136,7 @@
 
 (defun lexpr-ref (vec offset)
   (assert (and (ccl-uvector-p vec) (eql (uvector-subtag vec) subtag-lexpr-vector)))
-  (svref (uvector-data vec) offset))
+  (gvref vec offset))
 
 (defbseval $bs-this-function ()
   `(bsenv-self ,*env-var-name*))
@@ -157,7 +162,7 @@
 (defbseval $bs-require-number (obj) `(require-type ,obj 'ccl-number))
 (defbseval $bs-require-real (obj) `(require-type ,obj '(or ccl-integer ccl-ratio)))
 (defbseval $bs-require-character (obj) `(require-type ,obj 'character))
-(defbseval $bs-require-simple-string (obj) `(require-type ,obj 'ccl-simple-base-string))
+(defbseval $bs-require-simple-string (obj) `(require-type ,obj 'ccl-simple-string))
 (defbseval $bs-require-u8 (obj) `(require-type ,obj '(unsigned-byte 8)))
 
 (defbseval $bs-closed-function (func inh)
@@ -210,7 +215,7 @@
 (defun dbind-save (symbols)
   (loop for sym in symbols
     as symv = (sym-symvector sym)
-    as bits = (svref (uvector-data symv) sym.bits)
+    as bits = (gvref symv sym.bits)
     do (when (or (logbitp $sym_vbit_global bits)
                  (logbitp $sym_vbit_constant bits))
          (error "Cannot bind global value ~s" sym))
@@ -311,6 +316,9 @@
 (defbseval $bs-funcall (fn &rest args)
   `(apply-in-environment ,*env-var-name* ,fn (list ,@args)))
 
+(defbseval $bs-multiple-value-list (form) `(multiple-value-list ,form))
+
+
 (defvar *trace-funcall* nil)
 
 ;;; **TODO: use when-let etc!
@@ -330,6 +338,15 @@
       (break "Calling fn ~s with args ~s not with  magic entry" fn args))
     (apply-in-environment-KNOWN-METHOD env fn-or-sym args)))
 
+(defun compile-native-function (ccl-name lambda)
+  (multiple-value-bind (res warnings-p failure-p) (compile 'ccl-fn lambda)
+    (when failure-p (error "compilation failed on ~s" ccl-name))
+    (when warnings-p      ;; All the warnings complained of errors in CCL-FN, give a hit of real name
+      (format t "in compilation of ~s." ccl-name))
+    (setf res (fdefinition res))
+    #+ccl (ccl::lfun-name res `(ccl-fn ,(or (ignore-errors (native ccl-name)) ccl-name)))
+    res))
+#+hemlock (hemlock::defindent "compile-native-function" 1)
 
 (defun apply-in-environment-KNOWN-METHOD (env fn-or-sym args &aux (old *temp-debug*))
   (when *trace-funcall*
@@ -350,26 +367,12 @@
              (apply native-fn args)
              (funcall native-fn env fn args)))
           ((ccl-function-name fn)
-           (destructuring-bind (argspecs body num-vars) (cddr bslambda)
-;;;             (FORMAT T "~&COMPILING ~s ~s" (second bslambda) fn)
-             (multiple-value-bind (res warnings-p failure-p)
-                                  (compile 'bs-func
-                                           `(lambda (parent-env self args)
-                                              (let ((,*env-var-name* (make-bsenv :parent parent-env :self self :locals (make-array ,num-vars))))
-                                                (bseval-init-lambda-env ,*env-var-name* ',argspecs args) ;;; this could be a macro someday
-                                                ,body)))
-               (declare (ignore warnings-p))
-               (when failure-p (error "compilation failed on ~s" fn))
-               (setq native-fn (fdefinition res))
-               #+CCL (ccl::lfun-name native-fn (labels ((nat (name)
-                                                          (if (ccl-symvector-p name)
-                                                            (intern (sym-native-pname name) *native-package*)
-                                                            (if (consp name)
-                                                              (mapcar #'nat name)
-                                                              (if (stringp name)
-                                                                (native-string name)
-                                                                name)))))
-                                                 `(bs-func ,(nat (ccl-function-name fn)))))))
+           (destructuring-bind (name argspecs body num-vars) (cdr bslambda)
+             (setq native-fn (compile-native-function name
+                               `(lambda (parent-env self args)
+                                  (let ((,*env-var-name* (make-bsenv :parent parent-env :self self :locals (make-array ,num-vars))))
+                                    (bseval-init-lambda-env ,*env-var-name* ',argspecs args) ;;; this could be a macro someday
+                                    ,body)))))
            (setf (ccl-function-native-fn fn) native-fn)
            (when *temp-debug*
              (format t "~&~VT~@*~d. Calling ~s ~s ~s args (newly compiled)" *temp-debug*
@@ -484,6 +487,9 @@
 
 (defbseval $bs-single-float (num) `(coerce ,num 'single-float))
 
+;; make compiler do this
+(defbseval $bs-double-float (num) `(ccl-funcall ,(ccl '%double-float) ,num))
+
 
 ;; Should this do CCL-CHAR-CODE?  are ccl char<>code mappings different?
 (defbseval $bs-char-code (char) `(char-code ,char))
@@ -526,11 +532,12 @@
     (error "Cheating subtag-misc-ref not implemented yet for ~s ~s" subtag (uvector-subtag vec)))
   (uvref vec index))
 
+;;; TODO: go back do distinguishing gvref/set from uvref/set!
 (defbseval $bs-uvset (vec index value) `(uvset ,vec ,index ,value))
 (defbseval $bs-uvref (vec index) `(uvref ,vec ,index))
 (defbseval $bs-uvsize (vec) `(uvsize ,vec))
 
-;; Why not just compile to uvref.   There was a problem, investigate why.
+;; Why not just compile to gvref.   There was a problem, investigate why.
 (defbseval $bs-%svref (vec index)
   `(gvref ,vec ,index))
 
@@ -547,7 +554,7 @@
 (defun aref1 (arr index)
   (if (eql (typecode arr) subtag-vector-header)
     (ccl-funcall (ccl '%aref1) arr index)
-    (svref (uvector-data arr) index)))
+    (gvref arr index)))
 
 
 (defbseval $bs-aset1 (vec index val) `(aset1 ,vec ,index ,val))
@@ -555,7 +562,7 @@
 (defun aset1 (arr index val)
   (if (eql (typecode arr) subtag-vector-header)
     (ccl-funcall (ccl '%aset1) arr index val)
-    (setf (svref (uvector-data arr) index) val)))
+    (gvset arr index val)))
 
 ;; Returns whatever is at address+offset, assumes valid lisp value.
 #+NOTYET (defbseval $bs-fixnum-ref (address offset) (%fixnum-ref address offset))
@@ -629,8 +636,8 @@
 (defun setf-macptr (ptr value)
   (check-type ptr ccl-macptr)
   (check-type value ccl-macptr)
-  (setf (svref (uvector-data ptr) macptr.address-cell)
-        (svref (uvector-data value) macptr.address-cell))
+  (setf (svref (gvector-data ptr) macptr.address-cell)
+        (svref (gvector-data value) macptr.address-cell))
   ptr)
 
 

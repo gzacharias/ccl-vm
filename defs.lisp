@@ -46,7 +46,6 @@
 (defconstant ivector-subtags-32-bit 9)
 (defconstant ivector-subtags-64-bit 10)
 
-;; Define all the subtags from x86, but we won't be using them all!
 (defparameter *uvector-subtag-typekeys* (make-array 256 :initial-element nil))
 
 (defmacro subtag-typekey (subtag)
@@ -92,26 +91,26 @@
          collect `(setf (svref *uvector-subtag-typekeys* ,name) ,key))))
 
 (define-subtags gvector-subtags-0
-  subtag-symbol
+  subtag-symbol      ;; ccl-symvector
   subtag-catch-frame
   subtag-hash-vector
   subtag-pool
   subtag-population
-  subtag-package
+  subtag-package     ;; ccl-package
   subtag-slot-vector
   subtag-basic-stream
-  subtag-function
+  subtag-function    ;; ccl-function
   (subtag-array-header 10))
 
 (define-subtags gvector-subtags-1
   subtag-ratio
   subtag-complex
-  subtag-struct
-  subtag-istruct
+  subtag-struct      ;; ccl-struct
+  subtag-istruct     ;; ccl-istruct
   subtag-value-cell
   subtag-xfunction
   subtag-lock
-  subtag-instance
+  subtag-instance    ;; ccl-instance
   subtag-lexpr-vector   ;; Just for us!
   (subtag-vector-header 10)
   subtag-simple-vector)
@@ -128,19 +127,19 @@
   subtag-bit-vector)
 
 (define-subtags ivector-subtags-32-bit
-  subtag-bignum
+  subtag-bignum              ;; ccl-bignum
   subtag-double-float
   subtag-xcode-vector
   subtag-complex-single-float
   subtag-complex-double-float
   ;; common lisp vectors
-  (subtag-simple-string 12)
+  (subtag-simple-string 12)  ;; ccl-simple-string
   subtag-signed-32-bit-vector
   subtag-unsigned-32-bit-vector
   subtag-single-float-vector)
 
 (define-subtags ivector-subtags-64-bit
-  subtag-macptr
+  subtag-macptr               ;; ccl-macptr
   subtag-dead-macptr
   ;; Common lisp vectors)
   (subtag-complex-single-float-vector 11)
@@ -187,10 +186,14 @@
 ;;;; random utils
 
 
+(declaim (inline fixnump))
 (defun fixnump (x) (typep x 'fixnum))
 
 (declaim (inline require-type))
-(defun require-type (obj type) ;; native
+(defun require-type (obj type)
+  (if (typep obj type) obj (require-type-out-of-line obj type)))
+
+(defun require-type-out-of-line (obj type)
   (assert (typep obj type) (obj))
   obj)
 

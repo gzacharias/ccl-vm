@@ -2,6 +2,10 @@
 
 ;;; TODO: ** Are all args to CCL quoted?  Maybe it should be a macro
 
+;;; package for FFI defs that should come from groveling
+(defpackage "CCL-FFI" (:use))
+
+
 ;; Instead of putting lap functions in compiled files, put them directly here in the runtime
 
 (defmacro deflapfunction (name args-or-lap-name &body body)
@@ -106,7 +110,8 @@
   (check-type name ccl-symvector)
   (pushnew name *requested-native-values* :test #'uvector-equal)
   (warn "Trying to get native value of ~s" name)
-  37)
+  (cond ((eq name (ccl'batch-flag))    0) ;; don't want batch mode
+        (t 37)))
 
 (defparameter *fake-heap-image-name* nil)
 (defparameter *fake-argv* (cffi:foreign-alloc :pointer :count 0 :null-terminated-p t))
@@ -120,7 +125,9 @@
                (or *fake-heap-image-name*
                    (setq *fake-heap-image-name*
                          (cffi:foreign-string-alloc 
-                          (namestring *CCL-DIRECTORY*)))))
+                          ;; This is used only to set the CCL: logical name. It must be a file that exists,
+                          ;; inside the ccl directory (if we just use the directory, last component gets stripped)
+                          (namestring (make-pathname :name "cvmsrcs" :defaults *CCL-DIRECTORY*))))))
               ((eq name (ccl'argv)) *fake-argv*) ;;; *** TODO
               (t (warn "Trying to get native value of ~s (into ptr)" name)
                  37)))
@@ -176,31 +183,38 @@
 
 (declaim (inline u32-sign-extend))
 (defun u32-sign-extend (word)
-  ;(declare (type (unsigned-byte 32) word))
-  ;;; *** TODO: REMOVE
-  (check-type word (unsigned-byte 32))
-  (if (logbitp 31 word) (logior word (ash -1 -32)) word))
+  (if (logbitp 31 word) (logior word (ash -1 32)) word))
 
-;;; TODO: use this package for all the ffi defs that should come from groveling.
-(defpackage "CFFI-CONSTANTS" (:use))
-;(defvar *CFFI-CONSTANTS* (make-package "CFFI-CONSTANTS" :use nil))
-(defconstant CFFI-CONSTANTS::RTLD_GLOBAL 8)
-(defconstant CFFI-CONSTANTS::RTLD_NOLOAD 16)
-(defconstant CFFI-CONSTANTS::HOST_BASIC_INFO_COUNT 12)
-(defconstant CFFI-CONSTANTS::KERN_SUCCESS 0)
-(defconstant CFFI-CONSTANTS::HOST_BASIC_INFO 1)
-(defconstant CFFI-CONSTANTS::_SC_CLK_TCK 3)
-(defconstant CFFI-CONSTANTS::PATH_MAX 1024)
-(defconstant CFFI-CONSTANTS::S_IFMT  #xF000)
-(defconstant CFFI-CONSTANTS::S_IFDIR #x4000)
-(defconstant CFFI-CONSTANTS::S_IFREG #x8000)
-(defconstant CFFI-CONSTANTS::S_IFLNK #xA000)
-(defconstant CFFI-CONSTANTS::S_IFIFO #x1000)
+;;; Predefine some foreign fns we call during startup, figure out dynamic stuff later
+(cffi:defctype ccl-ffi::host_t :unsigned-int)
+(cffi:defctype ccl-ffi::size_t :uint64)
+(cffi:defctype ccl-ffi::offset_t :int64)
+
+
+(defconstant CCL-FFI::RTLD_GLOBAL 8)
+(defconstant CCL-FFI::RTLD_NOLOAD 16)
+(defconstant CCL-FFI::HOST_BASIC_INFO_COUNT 12)
+(defconstant CCL-FFI::KERN_SUCCESS 0)
+(defconstant CCL-FFI::HOST_BASIC_INFO 1)
+(defconstant CCL-FFI::_SC_CLK_TCK 3)
+(defconstant CCL-FFI::PATH_MAX 1024)
+(defconstant CCL-FFI::S_IFMT  #xF000)
+(defconstant CCL-FFI::S_IFDIR #x4000)
+(defconstant CCL-FFI::S_IFREG #x8000)
+(defconstant CCL-FFI::S_IFLNK #xA000)
+(defconstant CCL-FFI::S_IFIFO #x1000)
+(defconstant CCL-FFI::SEEK_CUR 1)
+(defconstant CCL-FFI::O_RDWR 2)
+(defconstant CCL-FFI::ENOENT 2)
+(defconstant CCL-FFI::ENFILE #x17)
+(defconstant CCL-FFI::EMFILE #x18)
+(defconstant CCL-FFI::_PC_MAX_INPUT 3)
+
 
 (deflapfunction cvm-os-constant (symvec)
   (check-type symvec ccl-symvector)
   (let* ((str (sym-native-pname symvec))
-         (sym (intern str :cffi-constants)))
+         (sym (intern str :CCL-FFI)))
     (unless (boundp sym)
       #-ccl (error "Don't know how to get OS constant ~s" sym)
       #+ccl (let ((val (ccl::load-os-constant sym)))
@@ -210,76 +224,87 @@
     (symbol-value sym)))
 
 
-;;; Predefine some foreign fns we call during startup, figure out dynamic stuff later
-(cffi:defctype size_t :unsigned-int)
-(cffi:defctype host_t :unsigned-int)
+
 
 ;;;; Very temporary, I hope..  
 (defparameter *known-c-functions-alist* nil)
 
-(defmacro def-external-call ((lisp-name string) return-type &rest argspecs)
-  (let ((body-form `(,lisp-name ,@(mapcar (lambda (argspec)
-                                            (destructuring-bind (var type) argspec
-                                              (if (eq type :pointer)
-                                                `(%macptr-ptr ,var)
-                                                var)))
-                                          argspecs))))
-    (when (eq return-type :pointer)
-      (setq body-form `(make-ccl-macptr ,body-form)))
-    `(progn
-       (cffi:defcfun (,lisp-name ,string)  ,return-type ,@argspecs)
-       (push (cons ,string (named-function ,lisp-name ,(mapcar #'car argspecs) ,body-form))
-             *known-c-functions-alist*)
-       ',lisp-name)))
+(defmacro def-external-call (name-spec return-type &rest argspecs)
+  (when (stringp name-spec)
+    (setq name-spec (list (intern (string-upcase name-spec) :CCL-FFI) name-spec)))
+  (destructuring-bind (lisp-name string) name-spec
+    (let ((body-form `(,lisp-name ,@(mapcar (lambda (argspec)
+                                              (destructuring-bind (var type) argspec
+                                                (if (eq type :pointer)
+                                                  `(%macptr-ptr ,var)
+                                                  var)))
+                                            argspecs))))
+      (when (eq return-type :pointer)
+        (setq body-form `(make-ccl-macptr ,body-form)))
+      `(progn
+         (cffi:defcfun (,lisp-name ,string)  ,return-type ,@argspecs)
+         (push (cons ,string
+                     (named-function ,lisp-name ,(mapcar #'car argspecs) ,body-form))
+               *known-c-functions-alist*)
+         ',lisp-name))))
 
 
-(def-external-call (cvmdarwin-ffi/memset "memset") :pointer
+(def-external-call "memset" :pointer
   (ptr :pointer)
   (val :int)
-  (size size_t))
+  (size ccl-ffi::size_t))
 
-(def-external-call (cvmdarwin-ffi/getdtablesize "getdtablesize") :int)
+(def-external-call "getdtablesize" :int)
 
-(def-external-call (cvmdarwin-ffi/mach_host_self "mach_host_self") host_t)
+(def-external-call "mach_host_self" ccl-ffi::host_t)
 
-(def-external-call (cvmdarwin-ffi/host_info "host_info") :int
-  (host host_t)
+(def-external-call "host_info" :int
+  (host ccl-ffi::host_t)
   (flavor :int)
   (host-info-out :pointer)
   (host-info-out-cnt :pointer))
 
-(def-external-call (cvmdarwin-ffi/getpagesize "getpagesize") :int)
+(def-external-call "getpagesize" :int)
 
-(def-external-call (cvmdarwin-ffi/sysconf "sysconf") :long
+(def-external-call "sysconf" :long
   (name :int))
 
-(def-external-call (cvmdarwin-ffi/getuid "getuid") :int)
+(def-external-call "getuid" :int)
 
-(def-external-call (cvmdarwin-ffi/getenv "getenv") :pointer
+(def-external-call "getenv" :pointer
   (name :pointer))
 
-(def-external-call (cvmdarwin-ffi/getpwuid_r "getpwuid_r") :int
+(def-external-call "getpwuid_r" :int
   (uid :int)
   (pwd :pointer)
   (buffer :pointer)
-  (size size_t)
+  (size ccl-ffi::size_t)
   (result :pointer))
+
+(def-external-call "isatty" :int
+  (fd :int))
+
+(def-external-call "fpathconf" :long
+  (fd :int)
+  (size :int))
 
 (defun get-external-fn (sym)
   (let ((name (sym-native-pname sym)))
-    ;; If this was more permanent --- instead of using name string, map from the SYM, which is in the cvmdarwin-ffi package.
     (or (cdr (assoc name *known-c-functions-alist* :test 'equal))
         (progn
           (cerror "try again" "unknown external fn ~s (~s)" sym (cffi:foreign-symbol-pointer name))
           (get-external-fn sym)))))
 
+;; TODO: Could init all the functions first time this is called, then set *known-c-functions-alist* to nil
 (deflapfunction cvm-external-call (sym &rest args)
   (assert (eq (sym-pkg sym) *ffi-pkg*))
-  ;; ok, so this depends on us KNOWING the arg/value convention of the fn
   (let ((ffn (sym-fboundp sym)))
     (unless ffn
-      (setf (sym-func sym) (setq ffn (get-external-fn sym))))
-    (apply ffn args)))
+      (setf (sym-func sym)
+            (setq ffn (make-cloned-fn 'lap
+                                      (vector sym (dpb (length args) $lfbits-numreq 0))
+                                      (get-external-fn sym)))))
+    (ccl-apply ffn args)))
 
 
 (deflapfunction called-for-mv-p () t)
@@ -320,15 +345,14 @@
 ;;; return that fixnum; else return nil.
 (deflapfunction %maybe-fixnum-from-one-or-two-digit-bignum (bignum)
   (assert (eq num-fixnum-bits 61)) ;; stop pretending...
-  (let ((vec (uvector-data bignum)))
-    (case (length vec)
-      (1 (u32-sign-extend (svref vec 0)))
-      (2 (let* ((low (svref vec 0))
-                (high (svref vec 1))
-                (too-high (ash high -28))) ;; sign bit + extra
-           (when (or (eql too-high 0) (eql too-high #xF))
-             (logior (ash (u32-sign-extend high) 32) low))))
-      (t nil))))
+  (case (uvsize bignum)
+    (1 (u32-sign-extend (uvref bignum 0)))
+    (2 (let* ((low (uvref bignum 0))
+              (high (uvref bignum 1))
+              (too-high (ash high -28))) ;; sign bit + extra
+         (when (or (eql too-high 0) (eql too-high #xF))
+           (logior (ash (u32-sign-extend high) 32) low))))
+    (t nil)))
 
 (deflapfunction %truncate-short-float->fixnum (f) (truncate f))
 
@@ -340,65 +364,100 @@
 ;;; trailing words should already be zeroed.
   (let ((high1 (ash fixnum -31))
         (low (logand fixnum u32-mask)))
+    (setf (uvref bignum 0) low)
     (if (or (eql high1 0) (eql high1 -1))
-      (setf (uvector-data bignum) (vector (logand fixnum u32-mask)))
-      (let ((vec (uvector-data bignum)))
-        (setf (svref vec 0) low)
-        (setf (svref vec 1) (logand (ash high1 -1) u32-mask)))))
+      (lap-%set-bignum-length 1 bignum)
+      (setf (uvref bignum 1) (logand (ash high1 -1) u32-mask))))
   fixnum)
 
 (deflapfunction %fixnum-intlen (number) (integer-length (the fixnum number)))
 
 (deflapfunction %set-bignum-length (newlen bignum)
-  (let* ((vec (uvector-data bignum))
-         (oldlen (length vec)))
+  (let ((oldlen (uvsize bignum)))
     (assert (<= newlen oldlen))
     (unless (eql newlen oldlen)
-      (setf (uvector-data bignum) (subseq vec 0 newlen)))))
+      (with-uvector-data (vec bignum)
+        (error "Can't %set-bignum-length of heap vector ~s" bignum)
+        (setf (uvector-data bignum) (subseq vec 0 newlen))))))
   
 (deflapfunction %bignum-hash (bignum)
-  (let* ((vec (if (typep bignum 'simple-vector) ;;** for testing only
-                 bignum
-                 (uvector-data bignum)))
-         (len (length vec))
+  (let* ((len (uvsize bignum))
          (hash (+ (ash len 8) subtag-bignum)))
-    ;; So at all times, hash is 32 bits because addl clears high word!!!  I think taht rolq should be roll !!
-    #+OLD (loop for digit across vec
-            do (setq hash (logior (ash hash -51)
-                                  (ash (logand hash (1- (ash 1 51))) 13)))
-            do (setq hash (logand #xFFFFFFFF (+ hash digit))))
-    (loop for digit across vec
-      do (setq hash (logand #xFFFFFFFF (+ digit (ash hash 13)))))
-    #+ccl(unless (eql hash (ccl::%bignum-hash (native-integer bignum)))
-           (break "mismatched hash for ~s: us ~s ccl ~s" bignum hash(ccl::%bignum-hash (native-integer bignum))))
+    (with-uvector-data (vec bignum)
+      (setq hash (error "Should implement ~s" `(heap-vector-bignum-hash ,bignum)))
+      ;; So at all times, hash is 32 bits because addl clears high word!!!  I think that rolq should be roll !!
+      ;; TODO: report this ^^^ (try it out)
+      #+OLD (loop for digit across vec
+              do (setq hash (logior (ash hash -51)
+                                    (ash (logand hash (1- (ash 1 51))) 13)))
+              do (setq hash (logand #xFFFFFFFF (+ hash digit))))
+      (loop for digit across vec
+        do (setq hash (logand #xFFFFFFFF (+ digit (ash hash 13))))))
+    #+ccl (let ((native (ccl::%bignum-hash (native-integer bignum))))
+            (unless (eql hash native)
+              (break "mismatched hash for ~s: us ~s ccl ~s" bignum hash native)))
     hash))
 
 (deflapfunction fix-digit-logand (fix big dest)
-  (let ((res (logand fix (svref (uvector-data big) 0))))
+  (let ((res (logand fix (uvref big 0))))
     (if (null dest)
       res
       (progn
-        (setf (svref (uvector-data dest) 0) res)
+        (setf (uvref dest 0) res)
         dest))))
 
-(defun ccl-bignum (bignum)
+(deflapfunction %multiply-and-add-fixnum-loop (len64 bignum fixnum result)
+  (declare (ignore len64))
+  (check-type fixnum fixnum)
+  (with-uvector-data (resultv result)
+    (error "Heap vector bignums not supported")
+    (let* ((val (native-integer bignum))
+           (res (* val fixnum)))
+      (data-for-bignum res resultv)
+      result)))
+
+(defun multiply-and-add-loop (bignum mult result)
+  (with-uvector-data (resultv result)
+    (error "Heap vector bignums not supported")
+    (let* ((val (native-integer bignum))
+           (res (* val mult)))
+      (data-for-bignum res resultv)
+      result)))
+
+(deflapfunction %multiply-and-add-loop64 (x y result i len-y) ;; x[i] * y
+  (declare (ignore len-y))
+  (with-uvector-data (resultv result)
+    (error "Heap vector bignums not supported")
+    (let* ((pos (* i 2))
+           (lo (REQUIRE-TYPE (uvref x pos) '(unsigned-byte 32)))
+           (hi (REQUIRE-TYPE (if (< (1+ pos) (uvsize x)) (uvref x (1+ pos)) 0) '(UNSIGNED-BYTE 32)))
+           (mult (+ (ash hi 32) lo))
+           (res (+ (native-integer result)
+                   (ash (* mult (native-integer y)) (* i 64)))))
+      (data-for-bignum res resultv)
+      result)))
+
+(defun data-for-bignum (bignum &optional dest-vec)
   (let* ((bits (integer-length bignum)) ;; bits not including sign
          (size (ceiling (1+ bits) 32))
-         (vec (make-array size)))
+         (vec (or dest-vec (make-array size))))
+    (assert (<= size (length vec)))
     (loop for i from 0 below size
       do (setf (svref vec i) (logand bignum u32-mask))
       do (setq bignum (ash bignum (- 32))))
-    (make-ccl-bignum :subtag subtag-bignum :data vec)))
+    vec))
+
+(defun ccl-bignum (bignum)
+  (make-ccl-bignum :subtag subtag-bignum :data (data-for-bignum bignum)))
 
 (defun native-integer (ccl-number)
   (if (fixnump ccl-number)
     ccl-number
     (if (ccl-bignum-p ccl-number)
-      (let* ((vec (uvector-data ccl-number))
-             (end (1- (length vec)))
-             (bignum (if (logbitp 31 (svref vec end)) -1 0)))
+      (let* ((end (1- (uvsize ccl-number)))
+             (bignum (if (logbitp 31 (uvref ccl-number end)) -1 0)))
         (loop for i from end downto 0
-          do (setq bignum (logior (ash bignum 32) (svref vec i))))
+          do (setq bignum (logior (ash bignum 32) (uvref ccl-number i))))
         bignum)
       (error "Not an integer ~s" ccl-number))))
 
@@ -514,13 +573,32 @@
   (fd  :int)
   (buf :pointer))
 
-;; Wonder why these in the kernel
+(cffi:defcfun (ff-lseek "lseek") ccl-ffi::offset_t
+  (fildes :int)
+  (offset ccl-ffi::offset_t)
+  (whence :int))
+
+
+(cffi:defcfun (ff-open "open") :int
+  (path :pointer)
+  (flag :int)
+  (mode :uint16))
+
+(defun kernel-import-lisp-lseek (fd offset whence)
+  (ff-lseek fd offset whence))
+
+(defun kernel-import-lisp-open (ptr flags mode)
+  (ff-open (%macptr-ptr ptr) flags mode))
+
+
 (defun kernel-import-lisp-gettimeofday (ptimeval ptz)
   (ff-gettimeofday (%macptr-ptr ptimeval) (%macptr-ptr ptz)))
 
 (defun kernel-import-lisp-realpath (nameptr resultptr)
-  (make-ccl-macptr
-   (ff-realpath (%macptr-ptr nameptr) (%macptr-ptr resultptr))))
+  (unless (cffi:null-pointer-p (%macptr-ptr resultptr))
+    (setf (cffi:mem-ref (%macptr-ptr resultptr) :uint8 0) 0))
+  (let ((res (ff-realpath (%macptr-ptr nameptr) (%macptr-ptr resultptr))))
+    (make-ccl-macptr res)))
 
 (defun kernel-import-lisp-stat (nameptr statptr)
   (assert (not (eql 0 (%macptr-value statptr)))) ;; for debuggging
@@ -528,6 +606,10 @@
 
 (defun kernel-import-lisp-fstat (fd statptr)
   (ff-fstat fd (%macptr-ptr statptr)))
+
+(cffi:defcvar ("errno" *ff-errno*) :int)
+
+(deflapfunction %get-errno () (- *ff-errno*))
 
 (deflapfunction %get-spin-lock (spin) spin)
 (deflapfunction %lock-gc-lock () 0)
@@ -556,7 +638,7 @@
 
 (let ((lock (make-rw-lock-obj)))
   (setf (sym-value (ccl '%all-packages-lock%)) lock)
-  (setf (sym-value (ccl '%system-locks%)) (make-uvector subtag-population (vector 0 0 (svref (uvector-data lock) 0)))))
+  (setf (sym-value (ccl '%system-locks%)) (make-uvector subtag-population (vector 0 0 (gvref lock 0)))))
 
 
 (defconstant node-size 8)
@@ -569,24 +651,19 @@
                 (#.(logand (- fulltag-misc) 7) fulltag-misc)
                 (#.(logand (- fulltag-symbol) 7) fulltag-symbol)))
          (index (1- (ash (+ offset tag) -3))))
-    (assert (< -1 index (length (uvector-data uvec))))
+    (assert (< -1 index (uvsize uvec)))
     index))
 
 (deflapfunction %store-node-conditional (node-offset object old new)
   (etypecase object
-    (ccl-uvector (let ((index (uvector-offset-to-cell-index object node-offset))
-                       (vec (uvector-data object)))
-                   (when (eq old (svref vec index))
-                     (setf (svref vec index) new)
+    (ccl-uvector (let ((index (uvector-offset-to-cell-index object node-offset)))
+                   (when (eq old (uvref object index))
+                     (setf (uvref object index) new)
                      T)))))
 
 
 (deflapfunction %set-hash-table-vector-key-conditional (node-offset vector old new)
-  (let ((vec (uvector-data vector))
-        (index (uvector-offset-to-cell-index vector node-offset)))
-    (when (eq old (svref vec index))
-      (setf (svref vec index) new)
-      T)))
+  (lap-%store-node-conditional node-offset vector old new))
 
 
 ;;; THE x8664 code for this returns  expected-val regardless of whether succeeded or not!!!  That's gotta be a bug.
@@ -605,10 +682,7 @@
 (deflapfunction %atomic-incf-node (by object offset)
   (etypecase object
     (ccl-uvector (let ((index (uvector-offset-to-cell-index object offset)))
-                   (incf (svref (uvector-data object) index) by)))))
-
-
-  
+                   (incf (uvref object index) by)))))
 
 
 (deflapfunction closure-function (func) (ccl-closure-function func))
@@ -624,16 +698,17 @@
 (deflapfunction %set-symptr-value %set-symptr-value)
 
 (deflapfunction %set-hash-table-vector-key (vector index value)
-  (setf (svref (uvector-data vector) index) value))
+  (gvset vector index value))
 
 
 (deflapfunction %string-hash (start str len)
-  (check-type str ccl-simple-base-string)
-  (loop with vec = (uvector-data str)
-    for hash = 0 then (logxor (logior (logand (ash hash 5) u32-mask) (ash hash -27))
-                              (char-code (aref vec index)))
-    for index from start below len
-    finally (return hash)))
+  (check-type str ccl-simple-string)
+  (with-uvector-data (vec str)
+    (error "Should implement  ~s" `(heap-vector-string-hash ,str))
+    (loop for hash = 0 then (logxor (logior (logand (ash hash 5) u32-mask) (ash hash -27))
+                                    (char-code (aref vec index)))
+      for index from start below len
+      finally (return hash))))
 
 (deflapfunction %pname-hash (str len)
   (lap-%string-hash 0 str len))
@@ -649,8 +724,11 @@
                         ((logbitp subtag numeric-subtag-mask)
                          (let ((xv (uvector-data x))
                                (yv (uvector-data y)))
-                           (and (eql (length xv) (length yv))
-                                (every #'lap-eql xv yv))))
+                           (if (or (typep xv 'cffi:foreign-pointer)
+                                   (typep yv 'cffi:foreign-pointer))
+                             (error "Should implement ~s" `(heap-vector-equal ,x ,y))
+                             (and (eql (length xv) (length yv))
+                                  (every #'lap-eql xv yv)))))
                         (t nil)))))))
 
 
@@ -660,10 +738,13 @@
              (and (consp y)
                   (lap-equal (car (the cons x)) (car (the cons y)))
                   (lap-equal (cdr (the cons x)) (cdr (the cons y)))))
-            ((and (ccl-simple-base-string-p x) (ccl-simple-base-string-p y))
+            ((and (ccl-simple-string-p x) (ccl-simple-string-p y))
              (let ((xv (uvector-data x))
                    (yv (uvector-data y)))
-               (and (eql (length xv) (length yv)) (every #'eql xv yv))))
+               (if (or (typep xv 'cffi:foreign-pointer)
+                       (typep yv 'cffi:foreign-pointer))
+                 (error "Should implement ~s" `(heap-vector-equal ,x ,y))
+                 (and (eql (length xv) (length yv)) (every #'eql xv yv)))))
             (t
              (let ((tag (fulltag x)))
                (and (eq tag (Fulltag y))
@@ -674,7 +755,7 @@
 (deflapfunction %type-of (x)
   (let ((type (%type-name-of x)))
     (if (eq type 'lock)
-      (svref (uvector-data x) 1)
+      (gvref x 1)
       (ccl-symbol type))))
 
 (deflapfunction true (&rest ignore)
@@ -711,28 +792,21 @@
   (setq hi (logand (1- (ash 1 24)) hi))
   (check-type low (unsigned-byte 28))
   (check-type sign (member 1 0 -1)) ;; 1 and 0 are the same...
-  (let* ((vec (uvector-data dfloat))
-         (loword (logior (ash (logand hi #xF) 28) low))
+  (let* ((loword (logior (ash (logand hi #xF) 28) low))
          (hiword (ash hi -4)))
     (assert (eql (uvector-subtag dfloat) subtag-double-float))
-    (setf (svref vec 0) loword)
-    (setf (svref vec 1) (logior (logand sign (ash 1 31))
-                                (ash exp 20)
-                                hiword))))
+    (setf (uvref dfloat 0) loword)
+    (setf (uvref dfloat 1) (logior (logand sign (ash 1 31))
+                                   (ash exp 20)
+                                   hiword))))
 
 ;; (ccl::add-bignum-and-fixnum  #(0 0 1) -1)  #(0 0 1) is (ash 1 64)
 
-(defun native-double-float (dfloat)
-  (let* ((vec (uvector-data dfloat))
-         (loword (svref vec 0))
-         (hiword (svref vec 1))
-         (mantissa (logior (ash (ldb (byte 20 0) hiword) 32) loword))
-         (exp (- (ldb (byte 11 20) hiword) 1074)))
-    (unless (zerop exp)
-      (setq mantissa (logior mantissa (ash 1 52)))
-      (setq exp (1- exp)))
-    (let ((float (scale-float (float mantissa 1.0d0) exp)))
-      (if (logbitp 31 hiword) (- float) float))))
+(deflapfunction %int-to-dfloat (int dfloat)
+  (check-type int ccl-fixnum)
+  (check-type dfloat ccl-double-float)
+  (ccl-double-float (coerce int 'double-float) dfloat))
+
 
 ;;; stuff that was in nfasload
 (deflapfunction register-package-ref (name)
@@ -749,12 +823,20 @@
     (pkg-arg thing nil)))
 
 (deflapfunction %new-package-hashtable (size)
-  (make-hash-table :test 'equal :size size))
+  (%new-htab size))
 
+;; I give up, everybody wants to use this, let them
+;;;  *** TODO back out of changes of putting more stuff in nfasload to avoid defining this
+(deflapfunction %get-htab-symbol (string len htab)
+  (assert (eq len (uvsize string)))
+  (let ((hashkey (native-string string)))
+    (multiple-value-bind (symv found-p) (gethash hashkey htab)
+      (when found-p
+        (values found-p (symvector-sym symv))))))
 
 (deflapfunction %find-symbol (string len package)
-  (check-type string ccl-simple-base-string)
-  (assert (eq len (length (uvector-data string))))
+  (check-type string ccl-simple-string)
+  (assert (eq len (uvsize string)))
   (multiple-value-bind (sym where) (find-sym-in-pkg string package)
     (values sym (ccl-symbol where) -23 -17)))
 
@@ -774,15 +856,15 @@
 
 (deflapfunction provide (module) ;; bootstrapping version
   (when (ccl-symvector-p module) (setq module  (sym-pname module)))
-  (check-type module ccl-simple-base-string)
+  (check-type module ccl-simple-string)
   (pushnew module (sym-value (ccl'*modules*)) :test 'uvector-equal))
 
 
 (deflapfunction %class-of-instance (instance)
-  (svref (uvector-data (svref (uvector-data instance) instance.class-wrapper)) %wrapper.class))
+  (gvref (gvref instance instance.class-wrapper) %wrapper.class))
 
 (deflapfunction class-of (object)
-  (let ((info (svref (uvector-data (sym-value (ccl '*class-table*)))
+  (let ((info (gvref (sym-value (ccl '*class-table*))
                      (if (ccl-uvector-p object)
                        (uvector-subtag object)
                        (fulltag object)))))
@@ -797,10 +879,11 @@
   (require-type (sym-func sym) 'ccl-function))
 
 (deflapfunction %init-misc (val uvector)
-  (if (ccl-simple-base-string-p uvector)
+  (if (ccl-simple-string-p uvector)
     (unless (characterp val) (setq val (code-char val))))
-  (let ((vec (uvector-data uvector)))
-    (loop for i from 0 below (length vec) do (setf (svref vec i) val))))
+  (with-uvector-data (data uvector)
+    (error "Should implement ~s" `(heap-vector-init ,val ,uvector))
+    (loop for i from 0 below (length data) do (setf (svref data i) val))))
 
 
 
@@ -818,26 +901,26 @@
      (setf (sym-func sym) fn)))
 
 (def-gf-proto gag-any-arg (env self args)
-  (let ((dt (svref (uvector-data self) 2))
-        (dcode (svref (uvector-data self) 3)))
+  (let ((dt (gvref self 2))
+        (dcode (gvref self 3)))
     (apply-in-environment env dcode (list dt args))))
 
 (%defvar (ccl '*gf-proto*) nil 'variable (sym-func (ccl 'gag-any-arg)))
 
 (def-gf-proto gag-one-arg (env self args)
   (assert (eql (length args) 1))
-  (let ((dt (svref (uvector-data self) 2))
-        (dcode (svref (uvector-data self) 3)))
+  (let ((dt (gvref self 2))
+        (dcode (gvref self 3)))
     (apply-in-environment env dcode (list* dt args))))
 
 (def-gf-proto gag-two-arg (env self args)
   (assert (eql (length args) 2))
-  (let ((dt (svref (uvector-data self) 2))
-        (dcode (svref (uvector-data self) 3)))
+  (let ((dt (gvref self 2))
+        (dcode (gvref self 3)))
     (apply-in-environment env dcode (list* dt args))))
 
 (def-gf-proto funcallable-trampoline (env self args)
-  (let ((dcode (svref (uvector-data self) 3)))
+  (let ((dcode (gvref self 3)))
     (apply-in-environment env dcode args)))
 
 (def-gf-proto unset-fin-trampoline (env self args)
@@ -871,7 +954,7 @@
   (make-cloned-fn 'combined-method
                   (vector thing dcode gf-or-cm bits)
                   (named-function combined-method-code (env self args)
-                    (let* ((data (uvector-data self))
+                    (let* ((data (gvector-data self))
                            (thing (svref data 0))
                            (dcode (svref data 1)))
                       (funcall-in-environment env dcode thing args)))))
@@ -881,7 +964,7 @@
                   (vector slot-id lookup name bits)
                   (named-function reader-method-code (env self args)
                     (destructuring-bind (instance) args
-                      (let* ((data (uvector-data self))
+                      (let* ((data (gvector-data self))
                              (slot-id (svref data 0)))
                         (funcall-in-environment env (svref data 1) instance slot-id))))))
 
@@ -891,7 +974,7 @@
                   (vector slot-id lookup name bits)
                   (named-function cvm-writer-method-code (env self args)
                     (destructuring-bind (new instance) args
-                      (let* ((data (uvector-data self))
+                      (let* ((data (gvector-data self))
                              (slot-id (svref data 0)))
                         (funcall-in-environment env (svref data 1)
                                                 instance slot-id new))))))
@@ -903,44 +986,44 @@
                   (named-function cvm-slot-lookup-fn-code (env self args)
                     (declare (ignore env))
                     (destructuring-bind (slot-id) args
-                      (let* ((data (uvector-data self))
-                             (map-data (svref data 0))
+                      (let* ((data (gvector-data self))
                              (table (svref data 1))
-                             (index (uvref slot-id slot-id.index)))
-                        (uvref table
-                               (if (< index (length map-data)) (svref map-data index) 0)))))))
+                             (index (gvref slot-id slot-id.index)))
+                        (gvref table
+                               (let ((map-data (svref data 0)))
+                                 (if (< index (length map-data)) (svref map-data index) 0))))))))
 
 (deflapfunction cvm-make-slot-getter (map table class lookup missing bits)
   (make-cloned-fn 'slot-getter
                   (vector map table class lookup missing bits)
                   (named-function cvm-slot-getter-code (env self args)
                     (destructuring-bind (instance slot-id) args
-                      (let* ((data (uvector-data self))
-                             (map-data (uvector-data (svref data 0)))
+                      (let* ((data (gvector-data self))
+                             (map-data (gvector-data (svref data 0)))
                              (table (svref data 1))
-                             (index (uvref slot-id slot-id.index)))
+                             (index (gvref slot-id slot-id.index)))
                         (if (or (>= index (length map-data))
                                 (eql 0 (setq index (svref map-data index))))
                           (funcall-in-environment env (svref data 4)  ;; missing
                                                   instance slot-id)
                           (funcall-in-environment env (svref data 3) ;; lookup using class
-                                                  (svref data 2) instance (uvref table index))))))))
+                                                  (svref data 2) instance (gvref table index))))))))
 
 (deflapfunction cvm-make-slot-setter (map table class lookup missing bits)
   (make-cloned-fn 'slot-setter
                   (vector map table class lookup missing bits)
                   (named-function cvm-slot-setter-code (env self args)
                     (destructuring-bind (instance slot-id val) args
-                      (let* ((data (uvector-data self))
-                             (map-data (uvector-data (svref data 0)))
+                      (let* ((data (gvector-data self))
+                             (map-data (gvector-data (svref data 0)))
                              (table (svref data 1))
-                             (index (uvref slot-id slot-id.index)))
+                             (index (gvref slot-id slot-id.index)))
                         (if (or (>= index (length map-data))
                                 (eql 0 (setq index (svref map-data index))))
                           (funcall-in-environment env (svref data 4)  ;; missing
                                                   instance slot-id val)
                           (funcall-in-environment env (svref data 3) ;; set using class
-                                                  (svref data 2) instance (uvref table index) val)))))))
+                                                  (svref data 2) instance (gvref table index) val)))))))
 
 
 (deflapfunction %apply-with-method-context (magic func args &environment env)
@@ -958,15 +1041,35 @@
                   (vector datum fn name bits)
                   (named-function type-fn-code (env self args)
                     (destructuring-bind (thing) args
-                      (funcall-in-environment env (ccl'%%typep) thing (uvref self 0))))))
-
-
+                      (funcall-in-environment env (ccl'%%typep) thing (gvref self 0))))))
 
 
 (deflapfunction %nth-immediate (fn index)
   (check-type fn ccl-function)
-  (svref (uvector-data fn) index))
+  (gvref fn index))
 
 (deflapfunction %set-nth-immediate (fn index value)
   (check-type fn ccl-function)
-  (setf (svref (uvector-data fn) index) value))
+  (gvset fn index value))
+
+
+;; aka Make a heap vector
+(deflapfunction fudge-heap-pointer (ptr subtag num-elts)
+  (check-type subtag (unsigned-byte 8))
+  (check-type num-elts (unsigned-byte 56))
+  (let ((ptr (%macptr-ptr ptr)))
+    (setf (cffi:mem-ref ptr :uint64) (logior (ash num-elts 8) subtag))
+    (make-uvector subtag ptr)))
+
+;; set ptr to point to the actual vector data
+(deflapfunction %vect-data-to-macptr (vect ptr)
+  (with-uvector-data (data vect)
+    (setf (%macptr-value ptr) (+ (cffi:pointer-address data) 8))
+    (error "not a heap vector: ~s" vect))
+  ptr)
+
+;; set ptr to the address to pass to free
+(deflapfunction %%make-disposable (ptr vect)
+  (with-uvector-data (data vect)
+    (setf (%macptr-value ptr) data)
+    (error  "Not a heap vector: ~s" vect)))
