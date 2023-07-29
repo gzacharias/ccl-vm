@@ -163,6 +163,7 @@
 (defbseval $bs-require-real (obj) `(require-type ,obj '(or ccl-integer ccl-ratio)))
 (defbseval $bs-require-character (obj) `(require-type ,obj 'character))
 (defbseval $bs-require-simple-string (obj) `(require-type ,obj 'ccl-simple-string))
+(defbseval $bs-require-simple-vector (obj) `(require-type ,obj 'ccl-simple-vector))
 (defbseval $bs-require-u8 (obj) `(require-type ,obj '(unsigned-byte 8)))
 
 (defbseval $bs-closed-function (func inh)
@@ -438,11 +439,8 @@
   (if (and (typep x '(or fixnum single-float))
            (typep y '(or fixnum single-float)))
     (< x y)
-    (if (and (ccl-uvector-p x)
-             (ccl-uvector-p y)
-             (= (uvector-subtag x) subtag-double-float)
-             (= (uvector-subtag y) subtag-double-float))
-      (< (native-double-float x) (native-double-float y))
+    (if (and (ccl-double-float-p x) (ccl-double-float-p y))
+      (< (the double-float (native-double-float x)) (the double-float (native-double-float y)))
       (ccl-funcall (ccl '<-2) x y))))
 
 (defbseval $bs-gt (x y) (let ((_x (gensym)))
@@ -456,8 +454,10 @@
   (if (and (typep x '(or fixnum single-float))
            (typep y '(or fixnum single-float)))
     (= x y)
-    (ccl-funcall (ccl '=-2) x y)))
-
+    (if (and (ccl-double-float-p x) (ccl-double-float-p y))
+      ;(uvector-equal x y) ;; ok assume they're normalized?
+      (= (the double-float (native-double-float x)) (the double-float (native-double-float y)))
+      (ccl-funcall (ccl '=-2) x y))))
 
 (declaim (ftype (function (t) ccl-fixnum) fixnumify))
 

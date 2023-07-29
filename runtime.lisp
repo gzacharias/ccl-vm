@@ -204,6 +204,7 @@
 (defconstant CCL-FFI::S_IFLNK #xA000)
 (defconstant CCL-FFI::S_IFIFO #x1000)
 (defconstant CCL-FFI::SEEK_CUR 1)
+(defconstant CCL-FFI::O_RDONLY 0)
 (defconstant CCL-FFI::O_RDWR 2)
 (defconstant CCL-FFI::ENOENT 2)
 (defconstant CCL-FFI::ENFILE #x17)
@@ -766,6 +767,32 @@
   (declare (ignore ignore))
   nil)
 
+(deflapfunction single-float-bits (float)
+  (multiple-value-bind (mantissa exp sign) (integer-decode-float float)
+    (setq exp (+ exp 150))
+    (if (logbitp 23 mantissa)
+      (if (<= exp 0)
+        (progn
+          (assert (>= exp -22))
+          (assert (zerop (ldb (byte (- 1 exp) 0) mantissa)))
+          (setq mantissa (ash mantissa (1- exp)) exp 0))
+        (setq mantissa (logandc2 mantissa (ash 1 23))))
+      (progn
+        ;; This might be making too many assumptions about integer-decode-float?
+        (assert (and (eq mantissa 0) (eq exp 0)))))
+    (check-type mantissa (unsigned-byte 23))
+    (check-type exp (unsigned-byte 8))
+    (logior (if (eql sign -1) (ash 1 31) 0)
+            (ash exp 23)
+            mantissa)))
+
+(deflapfunction %short-float-sign (float) (< float 0))
+
+(deflapfunction sfloat-significand-zeros (float)
+  (- 23 (integer-length (ldb (byte 23 0) (lap-single-float-bits float)))))
+
+(deflapfunction %short-float-abs (float) (abs float))
+
 (deflapfunction host-single-float-from-unsigned-byte-32 (u32)
   ;; Do what ccl would do to convert these into standard integer-decode-float values
   ;; then can re-encode them in the host lisp
@@ -800,13 +827,33 @@
                                    (ash exp 20)
                                    hiword))))
 
-;; (ccl::add-bignum-and-fixnum  #(0 0 1) -1)  #(0 0 1) is (ash 1 64)
+(deflapfunction %double-float-sign (dfloat)
+  (logbitp 31 (uvref dfloat 1)))
+
 
 (deflapfunction %int-to-dfloat (int dfloat)
   (check-type int ccl-fixnum)
   (check-type dfloat ccl-double-float)
   (ccl-double-float (coerce int 'double-float) dfloat))
 
+(deflapfunction double-float-bits (dfloat)
+  (check-type dfloat ccl-double-float)
+  (values (uvref dfloat 1) (uvref dfloat 0)))
+
+(deflapfunction dfloat-significand-zeros (dfloat)
+  (check-type dfloat ccl-double-float)
+  (let ((hi (ldb (byte 20 0) (uvref dfloat 1))))
+    (if (eql hi 0)
+      (+ 20 (- 32 (integer-length (uvref dfloat 0))))
+      (- 20 (integer-length hi)))))
+
+(deflapfunction %%double-float-abs! (dfloat result)
+  (setf (uvref result 0) (uvref dfloat 0))
+  (setf (uvref result 1) (logandc2 (uvref dfloat 1) (ash 1 31)))
+  result)
+
+(deflapfunction %%scale-dfloat! (dfloat int result)
+  (ccl-double-float (scale-float (native-double-float dfloat) int) result))
 
 ;;; stuff that was in nfasload
 (deflapfunction register-package-ref (name)

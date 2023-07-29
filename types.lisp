@@ -169,6 +169,8 @@
 (defun print-string-data (str stream)
   (prin1 (native-string str) stream))
 
+(def-uvector-subtype :simple-vector (ccl-simple-vector (:subtag-conser t)))
+
 (def-uvector-subtype :bignum (ccl-bignum (:subtag-conser t)))
 
 (deftype ccl-integer () `(or ccl-fixnum ccl-bignum))

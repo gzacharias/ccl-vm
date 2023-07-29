@@ -143,13 +143,16 @@ Maybe others.  who else uses pkg.itab/pkg.etab!
     ;; *** make it so REQUIRE can find our files
     (push (ccl "ccl:cvmsrcs;.cvmsrc")
           (sym-value (ccl'*module-search-path*)))
+    ;; make it so LOAD (called by REQUIRE) goes thru fasload
+    (setf (sym-value (ccl'*.fasl-pathname*))
+          (ccl-funcall (ccl'pathname) (ccl ".cvmsrc")))
     (pretend-fasload "l1-boot-lds")
     (pretend-fasload "l1-boot-1")
     (pretend-fasload "l1-boot-2")
     (pretend-fasload "l1-boot-3")
     ))
 
-;; called from lap-%fasload.
+;; also called from lap-%fasload.
 (defun pretend-fasload (filename)
   (let ((file (make-pathname :name (pathname-name filename) :defaults "ccl:cvmsrcs;.cvmsrc")))
     (if (probe-file file)
@@ -186,7 +189,7 @@ Maybe others.  who else uses pkg.itab/pkg.etab!
   (fasl-trace "~s ~s" '$fasl-set-package str)
   (check-type str ccl-simple-string)
   (let ((pkg (pkg-arg str)))
-    (assert (eq pkg *ccl-pkg*))
+    ;;(assert (eq pkg *ccl-pkg*))
     (setf (sym-value (ccl '*package*)) pkg)))
 
 (defun $fasl-defvar (sym &optional doc)

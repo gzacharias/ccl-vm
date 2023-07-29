@@ -72,8 +72,15 @@
          (setq prefix " "))))
 
 (defmacro ccl::dfunc (sym)
-  (when (ccl::quoted-form-p sym) (setq sym (cadr sym)))
-  `(pprint (fourth (ccl-vm::ccl-function-bslambda (ccl-vm::sym-func (ccl-vm::ccl ',sym))))))
+  (unless (ccl::quoted-form-p sym) (setq sym (cadr sym)))
+  `(ppfun (ccl-vm::ccl ',sym)))
+
+(defun ppfun (func-or-sym)
+  (let* ((func (ccl-vm::ensure-func func-or-sym))
+         (ccl::*print-right-margin* 150)
+         (bslambda (ccl-vm::ccl-function-bslambda func)))
+    (format t "~&~s ~s ~s" (first bslambda) (second bslambda) (third bslambda))
+    (pprint (fourth bslambda))))
 
 (import '(ccl::show-lfun-bits ccl::h ccl::dfunc) :ccl-vm)
 
