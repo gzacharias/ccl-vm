@@ -1,33 +1,8 @@
 (in-package :ccl-vm)
 
-;; Don't load nfasload!  We don't plan to use it, we just want to be able to
-;;  use the compiler and we'll be using our loader.
+;; Maybe should load nfasload and just comment out %fasload?  I think there is a mechanism for
+;; different fasload backends already!
 
-;; Then can replace the stuff in there that's used elsewhere with LAP, and
-;;  keep packages fast.
-#|  Stuff that happens at load time in nfasload.
-defines find-package, set-package, pkg-arg, register-package-ref as possibly 
-
-Ok, wait, l1-symhash uses stuff:
-  %htab-add-symbol
-  %find-symbol
-Maybe others.  who else uses pkg.itab/pkg.etab!
-
-(let* ((force-export-packages (list *keyword-package*))
-       (force-export-packages-lock (make-lock)))
-  (defun force-export-packages ()
-    (with-lock-grabbed (force-export-packages-lock)
-      (copy-list force-export-packages)))
-  (defun package-force-export (p)
-    (let* ((pkg (pkg-arg p)))
-      (with-lock-grabbed (force-export-packages-lock)
-        (pushnew pkg force-export-packages))
-    pkg))
-  (defun force-export-package-p (pkg)
-    (with-lock-grabbed (force-export-packages-lock)
-      (if (memq pkg force-export-packages)
-        t))))
-|#
 ;;;;; For testing only
 (import 'ccl::test-load :ccl-vm)
 (import 'ccl::test-vm :ccl-vm)
@@ -150,6 +125,14 @@ Maybe others.  who else uses pkg.itab/pkg.etab!
     (pretend-fasload "l1-boot-1")
     (pretend-fasload "l1-boot-2")
     (pretend-fasload "l1-boot-3")
+    (ccl-funcall (ccl 'require) (ccl-string "PREPARE-MCL-ENVIRONMENT"))
+    ;; This is from level-1.lisp.  (Next step will be to see if we can just load level-1 from cvmsrc!)
+    (setf (sym-value (ccl'*load-file-source-file*)) nil)
+    (setf (sym-value (ccl'*loading-toplevel-location*)) nil)
+    (ccl-funcall (ccl'%set-toplevel) (ccl'toplevel-loop))
+    (ccl-funcall (ccl'set-user-environment) t)
+    ;; This does ({THROW} {:TOPLEVEL})  There must be a catch in the kernel or somewhere that then invokes the tcr-toplevel-function.
+    (ccl-funcall (ccl'toplevel))
     ))
 
 ;; also called from lap-%fasload.
@@ -159,17 +142,35 @@ Maybe others.  who else uses pkg.itab/pkg.etab!
       (progn (cvmload file) t)
       (progn (format t "~&***SKIPPING ~s" filename) nil))))
 
+;;  When running in the VM, cvmsrc files need to be recognized as fasl files,
+;;  so our {%fasload} function can run and do the load using cvmload.  This is
+;;  accomplished by loading the cvm backend into the the VM, which makes {fasl-file-p}
+;;  be true for cvmsrc files.
 
 (defun cvmload  (file)
   (assert (equal (pathname-type file) "cvmsrc"))
   ;; Should we compile then load?  Only worth if can avoid the compile!
   ;; Which means we need to figure out fasl file conventions in the lisp.
   ;; Worry about it later
-  (let ((*loader-table* nil)
-        (*package* (find-package :ccl-vm)))
-    ;;; TODO: need to ccl-bind *package* so can then set it.
-    (declare (special *loader-table*))
-    (load file)))
+  (loop
+    (restart-case ;; remove this once debugged
+        (return (let ((*loader-table* nil)
+                      (*package* (find-package :ccl-vm))
+                      (cur-pkg (%sym-value (ccl'*package*)))
+                      (cur-rdtable (%sym-value (ccl'readable*))))
+                  (declare (special *loader-table*))
+                  (unwind-protect
+                      ;; We want to load this as a source file. There is no way to ensure that portably,
+                      ;; but in practice any lisp would interpret a random text file as source, except for
+                      ;; this little weirdness in CCL that we introduced...
+                      (let (#+ccl(ccl::*known-backends* (remove (pathname-type file) ccl::*known-backends*
+                                                                :key (lambda (b)
+                                                                       (pathname-type (ccl::backend-target-fasl-pathname b)))
+                                                                :test 'equal)))
+                        (load file))
+                    (%set-sym-value (ccl'*package*) cur-pkg)
+                    (%set-sym-value (ccl'readable*) cur-rdtable) cur-rdtable)))
+      (retry-load () :report (lambda (s) (format s "Retry CVMLOAD ~s" file))))))
 
 
 ;; a CVMSRC file is a bunch of toplevel calls to these $fasl functions.  The arguments
@@ -184,6 +185,12 @@ Maybe others.  who else uses pkg.itab/pkg.etab!
        (fresh-line *trace-output*)
        (format *trace-output* ,@format-args))))
 
+
+(defun $fasl-init (num-imms)
+  (declare (special *loader-table*))
+  (assert (boundp '*loader-table*))
+  (assert (null *loader-table*))
+  (setq *loader-table* (make-array num-imms)))
 
 (defun $fasl-set-package (str)
   (fasl-trace "~s ~s" '$fasl-set-package str)
@@ -232,6 +239,14 @@ Maybe others.  who else uses pkg.itab/pkg.etab!
     (check-type sym ccl-symbol)
     (record-debug-info sym doc 'function)
     (ccl-set-macro-function sym fn)))
+
+(defun $fs-ref (index)
+  (declare (special *loader-table*))
+  (svref *loader-table* index))
+
+(defun $fs-set (index value)
+  (declare (special *loader-table*))
+  (setf (svref *loader-table* index) value))
 
 (defun $fs-unbound-marker () *unbound-marker*)
 (defun $fs-slot-unbound-marker () *slot-unbound-marker*)

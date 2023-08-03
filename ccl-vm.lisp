@@ -72,7 +72,7 @@
          (setq prefix " "))))
 
 (defmacro ccl::dfunc (sym)
-  (unless (ccl::quoted-form-p sym) (setq sym (cadr sym)))
+  (when (ccl::quoted-form-p sym) (setq sym (cadr sym)))
   `(ppfun (ccl-vm::ccl ',sym)))
 
 (defun ppfun (func-or-sym)

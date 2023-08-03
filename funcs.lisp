@@ -4,13 +4,6 @@
 ;;; or lfun.  but not "function"
 ;(SETQ *PRINT-CATCH-ERRORS* NIL)
 
-(defmethod print-object ((fn ccl-function) stream)
-  (assert (eq (uvector-subtag fn) subtag-function))
-  (princ "<FUNC " stream)
-  (print-function-data fn stream)
-  (princ ">" stream))
-  
-
 ;(defconstant combined-method.thing 0)
 ;(defconstant combined-method.dcode 1)
 ;(defconstant combined-method.gf 2)
@@ -65,26 +58,29 @@
            (gvref (gvref fn gf.slots) sgf.name))
           (t (ccl-function-name (ccl-closure-function fn))))))
 
-(defmethod print-uvector-data ((type (eql :function)) fn stream) (print-function-data fn stream))
-
-(defun print-function-data (fn stream)
+(def-uvector-print-text :function func-print-text (fn)
   (let* ((bits (ccl-function-bits fn))
          (name (func-name fn)))
-    (if (ccl-function-native-fn fn)
-      (if (consp (ccl-function-bslambda fn))
-        (princ "Compiled" stream)
-        (prin1 (ccl-function-bslambda fn) stream))
-      (princ "Interp" stream))
-    (when (logbitp $lfbits-method-bit bits)
-      (princ (if (ccl-instance-p (ccl-function-name (ccl-closure-function fn)))
-               " Meth"
-               " Raw Meth") stream))
-    (when (logbitp $lfbits-trampoline-bit bits)
-      (princ " trampoline" stream))
-    (princ " " stream)
-    (if (typep name 'ccl-symbol)
-      (print-symbol-data (sym-symvector name) stream)
-      (print-object name stream))))
+    (format nil "~a ~a~a ~a"
+            (if (ccl-function-native-fn fn)
+              (if (consp (ccl-function-bslambda fn))
+                "Compiled"
+                (ccl-function-bslambda fn)) ;; this is lisp sym
+              "Interp")
+            (if (logbitp $lfbits-method-bit bits)
+               (if (ccl-instance-p (ccl-function-name (ccl-closure-function fn)))
+                 "Meth"
+                 "Raw Meth")
+               (if (logbitp $lfbits-gfn-bit bits)
+                 (if (logbitp $lfbits-cm-bit bits)
+                   "Combined Meth GF"
+                   "GF")
+                 (if (logbitp $lfbits-cm-bit bits) ;; really nextmeth-bit, overloaded.
+                   "Combined Meth"
+                   "Func")))
+            (if (logbitp $lfbits-trampoline-bit bits) " trampoline" "")
+            (if (typep name 'ccl-symbol) (sym-print-text name) name))))
+
 
 (defun cons-ccl-function ()
   (%make-ccl-function :subtag subtag-function

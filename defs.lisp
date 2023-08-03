@@ -91,7 +91,7 @@
          collect `(setf (svref *uvector-subtag-typekeys* ,name) ,key))))
 
 (define-subtags gvector-subtags-0
-  subtag-symbol      ;; ccl-symvector
+  subtag-symvector      ;; ccl-symvector
   subtag-catch-frame
   subtag-hash-vector
   subtag-pool
@@ -148,6 +148,30 @@
   subtag-unsigned-64-bit-vector
   subtag-double-float-vector)
 
+(defparameter *subtag-ffi-types*
+  (let ((arr (make-array 256 :initial-element nil)))
+    (setf (svref arr subtag-bit-vector) :bit)
+    (setf (svref arr subtag-signed-8-bit-vector) :int8)
+    (setf (svref arr subtag-unsigned-8-bit-vector) :uint8)
+    (setf (svref arr subtag-signed-16-bit-vector) :int16)
+    (setf (svref arr subtag-unsigned-16-bit-vector) :uint16)
+    (setf (svref arr subtag-signed-32-bit-vector) :int32)
+    (setf (svref arr subtag-unsigned-32-bit-vector) :uint32)
+    (setf (svref arr subtag-signed-64-bit-vector) :int64)
+    (setf (svref arr subtag-unsigned-64-bit-vector) :uint64)
+    (setf (svref arr subtag-complex-double-float-vector) '(:array 4 :uint32))
+    (setf (svref arr subtag-bignum) :uint32)
+    (setf (svref arr subtag-double-float) :uint32)
+    (loop for i from ivector-subtags-32-bit below 256 by #x10
+      do (when (svref *uvector-subtag-typekeys* i)
+           (setf (svref arr i) :uint32)))
+    (setf (svref arr subtag-signed-32-bit-vector) :int32)
+    (loop for i from ivector-subtags-64-bit below 256 by #x10
+      do (when (svref *uvector-subtag-typekeys* i)
+           (setf (svref arr i) :uint64)))
+    (setf (svref arr subtag-fixnum-vector) :int64)
+    (setf (svref arr subtag-signed-64-bit-vector) :int64)
+    arr))
 
 (defconstant numeric-subtag-mask
   (logior (ash 1 fulltag-even-fixnum)

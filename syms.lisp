@@ -35,39 +35,31 @@
 (defconstant $sym_fbit_constant_fold (+ 8 $sym_vbit_constant))
 (defconstant $sym_fbit_fold_subforms (+ 8 $sym_vbit_global))
 
-;;; ** TODO: rename subtag-symbol to subtag-symvector
-(defmethod print-object ((sym ccl-symvector) stream)
-  (assert (eq (uvector-subtag sym) subtag-symbol))
-  (format stream "<")
-  (print-symbol-data sym stream)
-  (format stream ">"))
-
-(defmethod print-uvector-data ((type (eql :symbol)) sym stream) (print-symbol-data sym stream))
-
-(defun print-symbol-data (sym stream)
+(def-uvector-print-text :symvector sym-print-text (sym)
+  (declare (special *cl-pkg* *ccl-pkg* *keyword-pkg*))
   (setq sym (sym-symvector sym))
   (let ((pkg (sym-pkg sym)))
     (if (eq pkg *cl-pkg*)
-      (format stream "CL:~a" (sym-native-pname sym))
+      (format nil "CL:~a" (sym-native-pname sym))
       (if (eq pkg *ccl-pkg*)
-        (format stream "CCL::~a" (sym-native-pname sym))
+        (format nil "CCL::~a" (sym-native-pname sym))
         (if (eq pkg *keyword-pkg*)
-          (format stream ":~a" (sym-native-pname sym))
+          (format nil ":~a" (sym-native-pname sym))
           (if (null pkg)
-            (format stream "#:~a" (sym-native-pname sym))
-            (format stream "~a::~s" (native-string (pkg-name (sym-pkg sym))) (sym-native-pname sym))))))))
+            (format nil "#:~a" (sym-native-pname sym))
+            (format nil "~a::~s" (native-string (pkg-name (sym-pkg sym))) (sym-native-pname sym))))))))
 
 
 (defun make-ccl-symvector (pname &optional (flags 0) (value *unbound-marker*))
   (check-type pname ccl-simple-string)
-  (%make-ccl-symvector :subtag subtag-symbol
+  (%make-ccl-symvector :subtag subtag-symvector
                        :data (vector pname   ;; pname
                                      value  ;;vcell
                                      *unbound-function* ;; fcell
                                      nil ;;pkg & type predicate
                                      flags  ;; flags
                                      ()  ;; plist
-                                     0))) ;; binding index
+                                     0))) ;; binding index. 0 means global
 
 ;; Early symbols, will get interned once packages are set up.
 (defvar *early-ccl-syms* nil)
@@ -99,29 +91,31 @@
   (native-string (sym-pname sym)))
 
 ;; Since we're single-threaded, there is only one value, and that is the global value!
-(defun %symptr-value (symvec)
-  #+vm-threads (let ((index (gvref symvec sym.binding-index)))
+(defun %sym-value (sym)
+  #+vm-threads (let* ((symvec (sym-symvector sym))
+                      (index (gvref symvec sym.binding-index)))
                  (if (and (< index (length *level-0-special-bindings-vector*))
                           (not (eq *no-thread-local-binding-marker*
                                    (aref *level-0-special-bindings-vector* index))))
                    (svref *level-0-special-bindings-vector* index)
                    (gvref symvec sym.vcell)))
-  #-vm-threads (gvref symvec sym.vcell))
+  #-vm-threads (gvref (sym-symvector sym) sym.vcell))
 
-(defun %set-symptr-value (symvec value)
-  #+vm-threads (let* ((index (gvref symvec sym.binding-index)))
+(defun %set-sym-value (sym value)
+  #+vm-threads (let* ((symvec (sym-symvector sym))
+                      (index (gvref symvec sym.binding-index)))
                  (if (and (< index (length *special-bindings-vector*))
                           (not (eq *no-thread-local-binding-marker*
                                    (aref *special-bindings-vector* index))))
                    (setf (aref *special-bindings-vector* index) value)
                    (setf (gvref symvec sym.vcell) value)))
-  #-vm-threads (setf (gvref symvec sym.vcell) value))
+  #-vm-threads (setf (gvref (sym-symvector sym) sym.vcell) value))
 
 (defun sym-boundp (sym)
-  (not (eq (%symptr-value (sym-symvector sym)) *unbound-marker*)))
+  (not (eq (%sym-value sym) *unbound-marker*)))
 
 (defun sym-value (sym)
-  (let ((val (%symptr-value (sym-symvector sym))))
+  (let ((val (%sym-value sym)))
     (if (eq val *unbound-marker*)
       (error "Unbound variable ~s" sym)
       val)))
@@ -130,7 +124,7 @@
 (defun (setf sym-value) (value sym)
   (check-type value ccl-object)
   (assert (not (eq value *unbound-marker*)))
-  (%set-symptr-value (sym-symvector sym) value))
+  (%set-sym-value sym value))
 
 
 ;; called for fasloading and also runtime.  Should be pretty similar to the actual
@@ -166,7 +160,9 @@
   (let* ((symvec (sym-symvector sym))
          (fn (gvref symvec sym.fcell)))
     (if (eq fn *unbound-function*)
-      (error "Unfbound variable ~s" sym)
+      (progn
+        (cerror "Try again" "Unfbound variable ~s" sym)
+        (sym-func sym))
       fn)))
 
 ;; %fhave.  Doesn't check the value, so can use it to set macros and such
@@ -211,11 +207,11 @@
 (defun %new-htab (size)
   (list* (make-uvector subtag-simple-vector (make-array size)) 0 (make-hash-table :test 'equal)))
 
-(defun %itab-get (hashkey pkg-vec)
-  (gethash hashkey (cddr (svref pkg-vec pkg.itab))))
-
-(defun %etab-get (hashkey pkg-vec)
-  (gethash hashkey (cddr (svref pkg-vec pkg.etab))))
+(defun %htab-get (hashkey htab)
+  (gethash hashkey (cddr htab)))
+  
+(defun %itab-get (hashkey pkg-vec) (%htab-get hashkey (svref pkg-vec pkg.itab)))
+(defun %etab-get (hashkey pkg-vec) (%htab-get hashkey (svref pkg-vec pkg.etab)))
 
 (defun %htab-add (hashkey htab sym)
   (destructuring-bind (uvec count . hash) htab
@@ -229,11 +225,8 @@
         (setf (cadr htab) (1+ count)))
       (setf (gethash hashkey hash) sym))))
 
-(defun %itab-add (hashkey pkg-vec sym)
-  (%htab-add hashkey (svref pkg-vec pkg.itab) sym))
-
-(defun %etab-add (hashkey pkg-vec sym)
-  (%htab-add hashkey (svref pkg-vec pkg.itab) sym))
+(defun %itab-add (hashkey pkg-vec sym) (%htab-add hashkey (svref pkg-vec pkg.itab) sym))
+(defun %etab-add (hashkey pkg-vec sym) (%htab-add hashkey (svref pkg-vec pkg.etab) sym))
 
 (defun %htab-rem (hashkey htab sym)
   (destructuring-bind (uvec count . hash) htab
@@ -247,17 +240,11 @@
           (setf (cadr htab) (1- count))
           (remhash hashkey hash))))))
 
-(defun %itab-rem (hashkey pkg-vec sym)
-  (%htab-rem hashkey (svref pkg-vec pkg.itab) sym))
+(defun %itab-rem (hashkey pkg-vec sym) (%htab-rem hashkey (svref pkg-vec pkg.itab) sym))
+(defun %etab-rem (hashkey pkg-vec sym) (%htab-rem hashkey (svref pkg-vec pkg.etab) sym))
 
-(defun %etab-rem (hashkey pkg-vec sym)
-  (%htab-rem hashkey (svref pkg-vec pkg.etab) sym))
-
-
-(defmethod print-uvector-data ((type (eql :package)) obj stream) (print-package-data obj stream))
-
-(defun print-package-data (obj stream)
-  (print-string-data (pkg-name obj) stream))
+(def-uvector-print-text :package pkg-print-text (obj)
+  (format nil "PKG ~a" (string-print-text (pkg-name obj))))
 
 (defun pkg-name (pkg)
   (car (gvref pkg pkg.names)))
@@ -281,7 +268,13 @@
           (setf (sym-value *istruct-cells-sym*) (cons pair alist))
           pair))))
 
-
+(defun %find-pkg (name &optional end)
+  (check-type name ccl-simple-string)
+  (when (and end (not (eql end (uvsize name))))
+    (with-uvector-data (data name)
+      (error "Heap vector not supported here")
+      (setq name (make-uvector subtag-simple-string (subseq data 0 end)))))
+  (find name (sym-value *all-packages-sym*) :test #'pkg-name-p))
 
 (defun pkg-arg (pkg-arg &optional (errorp t))
   (cond ((ccl-package-p pkg-arg)
@@ -291,14 +284,13 @@
         (t
          (when (typep pkg-arg 'ccl-symbol)
            (setq pkg-arg (sym-pname pkg-arg)))
-         ;; should allow non-simple-strings         
-         ; (setq pkg-arg (ensure-simple-string pkg-arg))
-         (check-type pkg-arg ccl-simple-string)
          (let* ((nicknames-fn (sym-fboundp (ccl 'package-%local-nicknames)))
                 (local-nicknames (and nicknames-fn
                                       (ccl-funcall nicknames-fn (sym-value (ccl '*package*))))))
+           ; (setq pkg-arg (ensure-simple-string pkg-arg))
+           (check-type pkg-arg ccl-simple-string)
            (or (cdr (assoc pkg-arg local-nicknames :test #'uvector-equal))
-               (or (find pkg-arg (sym-value *all-packages-sym*) :test #'pkg-name-p)
+               (or (%find-pkg pkg-arg)
                    (and errorp (error "No package named ~s" pkg-arg))))))))
 
 (def-early-sym *package-ref-sym* "PACKAGE-REF")
@@ -335,6 +327,7 @@
 
 (defun add-sym-to-pkg (sym pkg &optional (export-p nil))
   (declare (special *keyword-pkg*))
+  (setq sym (sym-symvector sym))
   (check-type sym ccl-symvector)
   (check-type pkg ccl-package)
   (let ((old (svref (gvector-data sym) sym.pkg-predicate)))
@@ -435,6 +428,19 @@
   do (add-sym-to-pkg sym *ccl-pkg*)
   finally (makunbound '*early-ccl-syms*))
 
+
+;; So there is this weird thing:
+;;  In ccl-export-syms, we export symbols from CCL.
+;;  In order to be exported from CCL, the symbols have to be present in the package.  5 of those
+;;  symbols are actually CL symbols and are normally just inherited by CCL. In the bootstrapping
+;;  version, they are also present in CCL because, well, they have always been and so always will be.
+;;  Since we create the package from scratch, we have to do it explicitly.
+
+(add-sym-to-pkg (find-sym-in-pkg (ccl-string "ADD-METHOD") *cl-pkg*) *ccl-pkg*)
+(add-sym-to-pkg (find-sym-in-pkg (ccl-string "COMPUTE-APPLICABLE-METHODS") *cl-pkg*) *ccl-pkg*)
+(add-sym-to-pkg (find-sym-in-pkg (ccl-string "METHOD-QUALIFIERS") *cl-pkg*) *ccl-pkg*)
+(add-sym-to-pkg (find-sym-in-pkg (ccl-string "REMOVE-METHOD") *cl-pkg*) *ccl-pkg*)
+(add-sym-to-pkg (find-sym-in-pkg (ccl-string "STYLE-WARNING") *cl-pkg*) *ccl-pkg*)
 
 (defparameter *native-package* (symbol-package '*native-package*))
 

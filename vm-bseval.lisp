@@ -15,6 +15,12 @@
 (defmacro vcell-value (vcell)
   `(svref (ccl-vcell-data ,vcell) 0))
 
+(defmethod print-object ((vcell ccl-vcell) stream)
+  (let ((value (uvref vcell 0))
+        (*print-length* (min (or *print-length* 3) 3))
+        (*print-level* (min (or *print-level* 2) 2)))
+    (format stream "<VCELL [~s]>" value)))
+
 ;; Don't ever need the parent, but it's useful for debugging as it gives a full backtrace.
 (defstruct bsenv
   (parent nil :type (or bsenv null) :read-only t)
@@ -23,11 +29,13 @@
 
 (defmethod print-object ((env bsenv) stream)
   (print-unreadable-object (env stream :type t :identity nil)
-    (format stream "~s :parent ~s ~s locals"
-            (let ((self (bsenv-self env)))
-              (if (consp self) (list (car self) (cadr self)) self))
-            (bsenv-parent env)
-            (length (bsenv-locals env)))))
+    (let ((parents (loop for penv = env then (bsenv-parent penv) while penv
+                     as self = (bsenv-self penv)
+                     collect (if (consp self) (list (car self) (cadr self)) self))))
+      (format stream "~s from ~s, ~s locals"
+              (car parents)
+              (cdr parents)
+              (length (bsenv-locals env))))))
 
 (defun bsenv-lvcell (env var-index)
   (require-type (svref (bsenv-locals env) var-index) 'ccl-vcell))
@@ -60,44 +68,74 @@
            (declare (ignorable ,*env-var-name*))
            ,form)))
 
-(defun bseval-init-lambda-env (env argspecs values)
-  (destructuring-bind (inherited req-lvs opt-lvs rest-lv keys-lv bits) argspecs
-    (declare (ignore bits)) ;; maybe need to do some method stuff?
-    (cassert (>= (length values) (length inherited)))
-    (loop for lv in inherited for vcell = (pop values)
-      do (setf (bsenv-lvcell env lv) vcell))
-    (cassert (>= (length values) (length req-lvs)))
-    (loop for lv in req-lvs for val = (pop values) do (bsenv-lbind env lv val))
-    (loop while (and values opt-lvs)
-      for val = (pop values) for (opt-lv nil supp-lv) = (pop opt-lvs)
-      do (bsenv-lbind env opt-lv val)
-      when supp-lv do (bsenv-lbind env supp-lv t))
-    (loop for (opt-lv init supp-lv) in opt-lvs
-      do (bsenv-lbind env opt-lv (bseval-in-environment env init))
-      when supp-lv do (bsenv-lbind env supp-lv nil))
-    (when rest-lv
-      (bsenv-lbind env rest-lv (copy-list values)))
-    (when keys-lv
-      (let* ((allow-other-keys-p (pop keys-lv))
-             (not-found-flag keys-lv))
-        (loop for (key key-lv init supp-lv) in keys-lv
-          do (let ((val (getf values key not-found-flag)))
-               (bsenv-lbind env key-lv (if (eq val not-found-flag)
-                                         (bseval-in-environment env init)
-                                         val))
-               (when supp-lv
-                 (bsenv-lbind env supp-lv (not (eq val not-found-flag))))))
-        (unless allow-other-keys-p
-          ;; TODO: check
-          )))))
+;; Why not do this at compile time?  Because don't want the compiler using native lisp calls so can be loaded by non-lisp vm's?
+(defun bslambda-lambda (bslambda)
+  (destructuring-bind (name argspecs body num-vars) (cdr bslambda)
+    (declare (ignore name))
+    (destructuring-bind (inherited req-lvs opt-lvs rest-lv keys-lvs bits) argspecs
+      (declare (ignore bits)) 
+      (let ((values-var (gensym "VALUES"))
+            (args-var (gensym "ARGS"))
+            (rev-inits nil)
+            (special-bindings nil))
+        (flet ((bind-form (lv value-form)
+                 (if (fixnump lv)
+                   `(bsenv-lbind ,*env-var-name* ,lv ,value-form)
+                   (let ((old-var (gensym (sym-native-pname lv))))
+                     (check-type lv ccl-symbol) ;; not T/NIL, can't bind those.
+                     (push (cons lv old-var) special-bindings)
+                     `(progn
+                        (setq ,old-var (%sym-value ',lv))
+                        (%set-sym-value ',lv ,value-form))))))
+          (push `(assert (>= (length ,values-var) ,(length inherited))) rev-inits)
+          (loop for lv in inherited
+            do (check-type lv fixnum)
+            do (push `(setf (bsenv-lvcell ,*env-var-name* ,lv) (pop ,values-var)) rev-inits))
+          (push `(assert (>= (length ,values-var) ,(length req-lvs))) rev-inits)
+          (loop for lv in req-lvs do (push (bind-form lv `(pop ,values-var)) rev-inits))
+          (loop while opt-lvs
+            for (opt-lv init supp-lv) = (pop opt-lvs)
+            do (push (bind-form opt-lv `(if ,values-var (pop ,values-var) ,init)) rev-inits)
+            when supp-lv do (push (bind-form supp-lv `(not (null ,values-var))) rev-inits))
+          (when rest-lv
+            (push (bind-form rest-lv `(copy-list ,values-var)) rev-inits))
+          (when keys-lvs
+            (let* ((allow-other-keys-p (pop keys-lvs))
+                   (key-val-var (and keys-lvs (gensym "KEY-VAL")))
+                   (key-inits nil))
+              (loop for (key key-lv init supp-lv) in keys-lvs
+                do (push (bind-form key-lv `(if (eq (setq ,key-val-var (getf ,values-var ',key 'not-found)) 'not-found)
+                                              ,init ,key-val-var))
+                         key-inits)
+                when supp-lv do (push (bind-form supp-lv `(not (eq ,key-val-var 'not-found))) key-inits)
+                finally (unless allow-other-keys-p
+                          ;; TODO: check
+                          ))
+              (when key-inits
+                (push `(let ,(and key-val-var `(,key-val-var)) ,@(nreverse key-inits)) rev-inits)))))
+
+        (push body rev-inits)
+        (setq body `(progn ,@(nreverse rev-inits)))
+        (when special-bindings
+          (setq body
+                `(let (,@(loop for sym.var in special-bindings
+                           collect `(,(cdr sym.var) 'uninitialized)))
+                   (unwind-protect
+                       ,body
+                     ,@(loop for (sym . var) in special-bindings
+                         collect `(unless (eq ,var 'uninitialized)
+                                    (%set-sym-value ',sym ,var)))))))
+
+        `(lambda (parent-env self ,args-var)
+           (let ((,*env-var-name* (make-bsenv :parent parent-env :self self :locals (make-array ,num-vars)))
+                 (,values-var ,args-var))
+             (declare (ignorable ,*env-var-name*))
+             ,body))))))
+
 
 (defun bseval-apply-lambda (env bslambda values)
   (cassert (bseval-op-p bslambda 'bslambda))
-  (destructuring-bind (name argspecs body num-vars) (cdr bslambda)
-    (declare (ignore name))
-    (let ((env (make-bsenv :parent env :self bslambda :locals (make-array num-vars))))
-      (bseval-init-lambda-env env argspecs values)
-      (bseval-in-environment env body))))
+  (eval `(,(bslambda-lambda bslambda) ',env ',bslambda ',values)))
 
 (defvar *known-bseval-ops* nil)
 
@@ -220,7 +258,7 @@
     do (when (or (logbitp $sym_vbit_global bits)
                  (logbitp $sym_vbit_constant bits))
          (error "Cannot bind global value ~s" sym))
-    collect (%symptr-value symv)))
+    collect (%sym-value symv)))
 
 (defun dbind-bind (symbols values)
   (assert (eq (length symbols) (length values)))
@@ -229,7 +267,7 @@
 
 (defun dbind-restore (symbols old-values)
   (loop for sym in symbols for val in old-values
-    do (%set-symptr-value (sym-symvector sym) val)))
+    do (%set-sym-value sym val)))
 
 
 (defbseval $bs-tagbody (&rest forms)
@@ -328,8 +366,6 @@
 (defun funcall-in-environment (env fn-or-sym &rest args)
   (apply-in-environment env fn-or-sym args))
 
-(defparameter *temp-debug* nil)
-
 (defun apply-in-environment (env fn-or-sym args)
   ;;; *** TEMP UNTIL I figure out what's going on.
   (let* ((fn (ensure-func fn-or-sym))
@@ -349,47 +385,24 @@
     res))
 #+hemlock (hemlock::defindent "compile-native-function" 1)
 
-(defun apply-in-environment-KNOWN-METHOD (env fn-or-sym args &aux (old *temp-debug*))
+(defun apply-in-environment-KNOWN-METHOD (env fn-or-sym args)
   (when *trace-funcall*
     (format t "~&APPLY ~s to ~s" fn-or-sym args))
   (let ((VALS (MULTIPLE-VALUE-LIST 
   (let* ((fn (ensure-func fn-or-sym))
          (native-fn (ccl-function-native-fn fn))
          (bslambda (ccl-function-bslambda fn)))
-  ;;    (when (and (not *temp-debug*) (eq fn-or-sym (ccl 'ensure-method))) (setq *temp-debug* 0))
-    (setq *temp-debug* (and *temp-debug* (if (fixnump *temp-debug*) (+ *temp-debug* 4) 0)))
     (cond (native-fn
-           (when *temp-debug*
-             (format t "~&~VT~@*~d. Calling ~s ~s ~s args" *temp-debug*
-                     (if (symbolp bslambda) bslambda 'bslambda)
-                     native-fn
-                     (length args)))
            (if (eq bslambda 'lap)
              (apply native-fn args)
              (funcall native-fn env fn args)))
           ((ccl-function-name fn)
-           (destructuring-bind (name argspecs body num-vars) (cdr bslambda)
-             (setq native-fn (compile-native-function name
-                               `(lambda (parent-env self args)
-                                  (let ((,*env-var-name* (make-bsenv :parent parent-env :self self :locals (make-array ,num-vars))))
-                                    (bseval-init-lambda-env ,*env-var-name* ',argspecs args) ;;; this could be a macro someday
-                                    ,body)))))
+           (setq native-fn (compile-native-function (second bslambda) (bslambda-lambda bslambda)))
            (setf (ccl-function-native-fn fn) native-fn)
-           (when *temp-debug*
-             (format t "~&~VT~@*~d. Calling ~s ~s ~s args (newly compiled)" *temp-debug*
-                     (if (symbolp bslambda) bslambda 'bslambda)
-                     native-fn
-                     (length args)))
            (funcall native-fn env fn args))
           (t ;; else anonymous fn, probably only called once!
            (assert (listp bslambda))
-           (when *temp-debug*
-             (format t "~&~VT~@*~d. No native code, applying (BSLAMBDA ~s ...)" *temp-debug* (cadr bslambda)))
            (bseval-apply-lambda env bslambda args)))))))
-
-    (when *temp-debug*
-      (format t "~&~VT~@*~d. Returned ~s values" *temp-debug* (length vals)))
-    (setq *temp-debug* old)
     (when *trace-funcall* (format t "~&RETURNED from ~s: ~s" fn-or-sym vals))
     (apply #'values vals)))
 

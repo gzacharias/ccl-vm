@@ -62,16 +62,25 @@
   (make-uvector subtag (make-array size :initial-element init)))
 
 (defmethod print-object ((obj ccl-uvector) stream)
-  (let ((type (subtag-typekey (uvector-subtag obj))))
-    (format stream "<~s ~s " (type-of obj) type)
-    ;; TODO: store the data printers somewhere instead of this silly method dispatch.
-    (print-uvector-data type obj stream)
-    (format stream ">")))
+  (let ((typekey (subtag-typekey (uvector-subtag obj))))
+    (let ((text (uvector-print-text typekey obj)))
+      (if text
+        (format stream "{~a}" text)
+        (format stream "<~s ~s~a ~s elts>"
+                (type-of obj)
+                typekey
+                (with-uvector-data (data obj) "(Heap Vec)"  "")
+                (uvsize obj))))))
 
-(defmethod print-uvector-data ((type t) obj stream)
-  (with-uvector-data (data obj)
-    (format stream "Heap Vec "))
-  (format stream "~s elts" (uvsize obj)))
+(defmethod uvector-print-text ((type t) obj)
+  (declare (ignore obj))
+  nil)
+
+(defmacro def-uvector-print-text (typekey fn args &body body)
+  `(progn
+     (defmethod uvector-print-text ((typekey (eql ,typekey)) ,@args) (,fn ,@args))
+     (defun ,fn ,args ,@body)))
+
 
 (defun uvector-equal (uv1 uv2) ;; true if same type and all data values are eql.
   (and (eql (uvector-subtag uv1)
@@ -111,14 +120,14 @@
 (defun uvref (uvec index)
   (check-type uvec ccl-uvector)
   (with-uvector-data (data uvec)
-    (error "Should implement ~s" `(heap-vector-uvref ,uvec ,index))
+    (heap-vector-uvref uvec index)
     (svref data index)))
 
 (defun uvset (uvec index val)
   (check-type uvec ccl-uvector)
   (check-type val ccl-object)
   (with-uvector-data (data uvec)
-    (error "Should implement ~s" `(heap-vector-uvset uvec ,index ,val))
+    (heap-vector-uvset uvec index val)
     ;;; *** TEMP
     (when (ccl-bignum-p uvec)
       (check-type val (unsigned-byte 32)))
@@ -129,7 +138,7 @@
 (defun uvsize (uvec)
   (check-type uvec ccl-uvector)
   (with-uvector-data (data uvec)
-    (error "should implement ~s" `(heap-vector-uvsize ,uvec))
+    (heap-vector-uvsize uvec)
     (length data)))
 
 
@@ -137,7 +146,7 @@
 ;; we need certain vectors to have a host class of their own so can use typecase,
 ;;  give them print methods, etc.
 
-(def-uvector-subtype :symbol (ccl-symvector (:constructor %make-ccl-symvector) (:subtag-conser t)))
+(def-uvector-subtype :symvector (ccl-symvector (:constructor %make-ccl-symvector) (:subtag-conser t)))
   
 (deftype ccl-symbol () '(or boolean ccl-symvector))
 
@@ -158,16 +167,8 @@
     (error "Should implement ~s" `(heap-vector-native-string ,str))
     (coerce data 'string)))
 
-(defmethod print-object ((str ccl-simple-string) stream)
-  (assert (eq (uvector-subtag str) subtag-simple-string))
-  (format stream "<STRING ")
-  (print-string-data str stream)
-  (format stream ">"))
-
-(defmethod print-uvector-data ((type (eql :simple-string)) str stream) (print-string-data str stream))
-
-(defun print-string-data (str stream)
-  (prin1 (native-string str) stream))
+(def-uvector-print-text :simple-string string-print-text (str)
+  (prin1-to-string (native-string str)))
 
 (def-uvector-subtype :simple-vector (ccl-simple-vector (:subtag-conser t)))
 
@@ -217,6 +218,10 @@
 (defconstant macptr.address-cell 0) ;; this contains raw native (unsigned-byte 64).
 ;(defconstant macptr.domain-cell 1)
 ;(defconstant macptr.type-cell 2)
+
+;(defconstant xmacptr.element-count 5)
+;(defconstant xmacptr.flags-cell 3)
+
 
 (defun make-ccl-macptr (native-value &optional gc-flags)
   (check-type native-value (or (signed-byte 65) cffi:foreign-pointer))
@@ -315,24 +320,16 @@
   (require-type (instance-slot obj %class.name) 'ccl-symbol))
 
 
-(defmethod print-object ((obj ccl-instance) stream)
-  (assert (eq (uvector-subtag obj) subtag-instance))
+(def-uvector-print-text :instance instance-print-text (obj)
   (let ((class-name (ccl-class-name (instance-class obj))))
     (cond ((eq class-name (ccl 'standard-method))
-           (princ "<STANDARD-METHOD " stream)
-           (print-function-data (instance-slot obj %method.function) stream)
-           (princ ">" stream))
-          (t
-           (princ "<INSTANCE " stream)
-           ;(print-instance-data :instance obj stream)
-           (princ ">" stream)))))
+           (format nil "~a ~a"
+                   (sym-print-text class-name)
+                   (func-print-text (instance-slot obj %method.function))))
+          (t (format nil "~a ~s slots"
+                     (if class-name (sym-print-text class-name) "Unnamed Instance")
+                     (uvsize (gvref obj instance.slots)))))))
 
-(defmethod print-uvector-data ((type (eql :instance)) obj stream) (print-instance-data obj stream))
-
-(defun print-instance-data (obj stream)
-  (let ((class-name (ccl-class-name (instance-class obj))))
-    (print-symbol-data class-name stream)
-    (format stream " ~s slots" (uvsize (gvref obj instance.slots)))))
 
 ;(defconstant slot-id.name 1)
 (defconstant slot-id.index 2)
@@ -351,13 +348,25 @@
 
 
 (defmethod print-object ((obj ccl-istruct) stream)
-  (princ "<ISTRUCT " stream)
-  (print-symbol-data (istruct-type obj) stream)
-  (format stream " ~d slots>" (1- (length (gvector-data obj)))))
-
-
+  (let ((type (istruct-type obj)))
+    (if (or (eq type (ccl'pathname)) (eq type (ccl'logical-pathname)))
+      (format stream "{#P~s}"
+              (native-string (ccl-funcall (ccl'namestring) obj)))
+      (format stream "<ISTRUCT ~a ~d slots>"
+              (sym-print-text type)
+              (1- (length (gvector-data obj)))))))
 
 (def-uvector-subtype :struct (ccl-struct (:constructor %make-ccl-struct) (:subtag-conser t)))
+
+
+(defconstant class-cell.name 1)
+
+(defmethod print-object ((obj ccl-struct) stream)
+  (let ((type (uvref (car (uvref obj 0)) class-cell.name)))
+    (format stream "<STRUCT ~a ~d slots>"
+            (sym-print-text type)
+            (1- (length  (gvector-data obj))))))
+
 
 (defun struct-ref (struct index)
   (check-type struct ccl-struct)
@@ -379,38 +388,6 @@
                         nil
                         nil
                         nil)))
-
-(defmethod print-uvector-data ((type (eql :lock)) lock stream) (print-lock-data lock stream))
-
-(defun print-lock-data (lock stream)
-  (let ((lockv (gvector-data lock)))
-    (format stream "KIND ~s WRITER ~s "
-            (if (eq (svref lockv 1) (ccl 'recursive-lock))
-              'recursive-lock
-              (if (eq (svref lockv 1) (ccl 'read-write-lock))
-                'read-write-lock
-                (svref lockv 1)))
-            (svref lockv 2))
-    (cond ((eq (svref lockv 1) (ccl 'recursive-lock))
-           (let ((ptr (%macptr-ptr (svref lockv 0))))
-             (format stream "LOCKPTR -> avail: ~s owner x~x count ~s signal ~s waiting ~s spinlock ~s"
-                     (cffi:mem-ref ptr :uint64 0)
-                     (cffi:mem-ref ptr :uint64 8)
-                     (cffi:mem-ref ptr :uint64 16)
-                     (cffi:mem-ref ptr :uint64 24)
-                     (cffi:mem-ref ptr :uint64 32)
-                     (cffi:mem-ref ptr :uint64 48))))
-          ((eq (svref lockv 1) (ccl 'read-write-lock))
-           (let ((ptr (%macptr-ptr (svref lockv 0))))
-             (format stream "RWLOCK -> spin: ~s state ~s blocked writers ~s readers ~s writer ~s signals reader ~s writer ~s"
-                     (cffi:mem-ref ptr :uint64 0)
-                     (cffi:mem-ref ptr :uint64 8)
-                     (cffi:mem-ref ptr :uint64 16)
-                     (cffi:mem-ref ptr :uint64 24)
-                     (cffi:mem-ref ptr :uint64 32)
-                     (cffi:mem-ref ptr :uint64 40)
-                     (cffi:mem-ref ptr :uint64 48))))
-          (t (format stream "Unknown ptr ~s" (svref lockv 0))))))
 
 
 ;; x8664 pointers to symbols or functions can be either tagged as misc or as sym/func
@@ -456,7 +433,7 @@
   (if (ccl-uvector-p obj)
     (uvector-subtag obj)
     (if (eq obj t)
-      subtag-symbol ;; be consistent
+      subtag-symvector ;; be consistent
       (lisptag obj))))
 
 (defun native (ccl-obj)
@@ -467,12 +444,13 @@
               ccl-obj
               (cons car cdr))))
     (ccl-uvector
+     ;; These are all ccl-uvector subtypes, could use typecase!
      (let ((subtag (uvector-subtag ccl-obj)))
        (cond ((eq subtag subtag-simple-string) (native-string ccl-obj))
              ((eq subtag subtag-double-float) (native-double-float ccl-obj))
              ((eq subtag subtag-macptr) (%macptr-ptr ccl-obj))
              ((eq subtag subtag-bignum) (native-integer ccl-obj))
-             ((eq subtag subtag-symbol) (native-symbol ccl-obj))
+             ((eq subtag subtag-symvector) (native-symbol ccl-obj))
              ((eq subtag subtag-simple-vector) (gvector-data ccl-obj))
              (t (error "Don't know how to nativize ~s" ccl-obj)))))
     (t ccl-obj)))

@@ -6,7 +6,11 @@
 (defpackage "CCL-FFI" (:use))
 
 
-;; Instead of putting lap functions in compiled files, put them directly here in the runtime
+;;; CMAIN is a nilreg-relative symbol, so is accessible in the kernel.
+;;;  It gets set to XCMAIN which each architecture is supposed to define as a CALLBACK, i.e.
+;;;  a way for kernel to call us.   It seems to be called for signals.
+(%set-sym-value (ccl 'xcmain) 'callback-for-cmain?)
+(%set-sym-value (ccl '%xerr-disp) 'callback-for-%err-disp?)
 
 (defmacro deflapfunction (name args-or-lap-name &body body)
   (let ((lap-fn (if (listp args-or-lap-name)
@@ -81,7 +85,7 @@
     (error "Nobody expects a dead macptr")))
 
 (deflapfunction %setf-macptr-to-object (macptr obj)
-  ;; So far only used for (%current-tcr) which is 0.
+  ;; So far only used for (%current-tcr) which is a fixnum.
   ;; if need be, can start using the *fake-address  stuff below.
   (if (typep obj 'ccl-fixnum)
     (setf (%macptr-value macptr) (ash obj fixnum-shift))
@@ -186,8 +190,9 @@
   (if (logbitp 31 word) (logior word (ash -1 32)) word))
 
 ;;; Predefine some foreign fns we call during startup, figure out dynamic stuff later
-(cffi:defctype ccl-ffi::host_t :unsigned-int)
+(cffi:defctype ccl-ffi::host_t :uint32)
 (cffi:defctype ccl-ffi::size_t :uint64)
+(cffi:defctype ccl-ffi::ssize_t :int64)
 (cffi:defctype ccl-ffi::offset_t :int64)
 
 
@@ -206,10 +211,37 @@
 (defconstant CCL-FFI::SEEK_CUR 1)
 (defconstant CCL-FFI::O_RDONLY 0)
 (defconstant CCL-FFI::O_RDWR 2)
+(defconstant CCL-FFI::EAI_AGAIN 2)
+(defconstant CCL-FFI::EAI_FAIL 4)
+(defconstant CCL-FFI::EAI_NONAME 8)
+(defconstant CCL-FFI::EPERM 1)
 (defconstant CCL-FFI::ENOENT 2)
-(defconstant CCL-FFI::ENFILE #x17)
-(defconstant CCL-FFI::EMFILE #x18)
+(defconstant CCL-FFI::EINTR 4)
+(defconstant CCL-FFI::ENOMEM 12)
+(defconstant CCL-FFI::EACCES 13)
+(defconstant CCL-FFI::ENFILE 23)
+(defconstant CCL-FFI::EMFILE 24)
+(defconstant CCL-FFI::EAGAIN 35)
+(defconstant CCL-FFI::EADDRINUSE 48)
+(defconstant CCL-FFI::EADDRNOTAVAIL 49)
+(defconstant CCL-FFI::ENETDOWN 50)
+(defconstant CCL-FFI::ENETUNREACH 51)
+(defconstant CCL-FFI::ENETRESET 52)
+(defconstant CCL-FFI::ECONNABORTED 53)
+(defconstant CCL-FFI::ECONNRESET 54)
+(defconstant CCL-FFI::ENOBUFS 55)
+(defconstant CCL-FFI::ESHUTDOWN 58)
+(defconstant CCL-FFI::ETIMEDOUT 60)
+(defconstant CCL-FFI::ECONNREFUSED 61)
+(defconstant CCL-FFI::EHOSTDOWN 64)
+(defconstant CCL-FFI::EHOSTUNREACH 65)
 (defconstant CCL-FFI::_PC_MAX_INPUT 3)
+(defconstant CCL-FFI::S_IFSOCK #xC000)
+(defconstant CCL-FFI::SOL_SOCKET #xFFFF)
+(defconstant CCL-FFI::SO_SNDLOWAT #x1003)
+(defconstant CCL-FFI::AF_INET 2)
+(defconstant CCL-FFI::AF_INET6 30)
+(defconstant CCL-FFI::AF_UNIX 1)
 
 
 (deflapfunction cvm-os-constant (symvec)
@@ -219,7 +251,7 @@
     (unless (boundp sym)
       #-ccl (error "Don't know how to get OS constant ~s" sym)
       #+ccl (let ((val (ccl::load-os-constant sym)))
-              (FORMAT T "~&;;;   CVM-OS-CONSTANT had to look up ~s [#x~x]" sym val)
+              (FORMAT T "~&(defconstant ~s [#x~x]" sym val)
               ;; load-os-constants defines the constant
               (assert (eq val (symbol-value sym)))))
     (symbol-value sym)))
@@ -288,6 +320,13 @@
 (def-external-call "fpathconf" :long
   (fd :int)
   (size :int))
+
+(def-external-call "getsockopt" :int
+  (fd :int)
+  (level :int)
+  (option :int)
+  (opt_value :pointer)
+  (opt_len :pointer))
 
 (defun get-external-fn (sym)
   (let ((name (sym-native-pname sym)))
@@ -372,6 +411,10 @@
   fixnum)
 
 (deflapfunction %fixnum-intlen (number) (integer-length (the fixnum number)))
+
+(deflapfunction %bignum-sign-bits (bignum)
+  (let ((high (uvref bignum (1- (uvsize bignum)))))
+    (integer-length (if (logbitp 31 high) (lognot high) high))))
 
 (deflapfunction %set-bignum-length (newlen bignum)
   (let ((oldlen (uvsize bignum)))
@@ -532,6 +575,9 @@
 (defun kernel-import-malloc (size)
   (make-ccl-macptr (cffi:foreign-alloc :int8 :count size)))
 
+(defun kernel-import-free (ptr)
+  (cffi:foreign-free (%macptr-ptr ptr)))
+
 (defun kernel-import-fd-setsize-bytes () ;;;; **** TODO 
   ;; sizeof(fd_set)
   128)
@@ -575,7 +621,7 @@
   (buf :pointer))
 
 (cffi:defcfun (ff-lseek "lseek") ccl-ffi::offset_t
-  (fildes :int)
+  (fd :int)
   (offset ccl-ffi::offset_t)
   (whence :int))
 
@@ -585,11 +631,25 @@
   (flag :int)
   (mode :uint16))
 
+(cffi:defcfun (ff-close "close") :int
+  (fd :int))
+
+(cffi:defcfun (ff-read "read") ccl-ffi::ssize_t
+  (fd :int)
+  (buf :pointer)
+  (count ccl-ffi::size_t))
+
 (defun kernel-import-lisp-lseek (fd offset whence)
   (ff-lseek fd offset whence))
 
 (defun kernel-import-lisp-open (ptr flags mode)
   (ff-open (%macptr-ptr ptr) flags mode))
+
+(defun kernel-import-lisp-close (fd)
+  (ff-close fd))
+
+(defun kernel-import-lisp-read (fd buf count)
+  (ff-read fd (%macptr-ptr buf) count))
 
 
 (defun kernel-import-lisp-gettimeofday (ptimeval ptz)
@@ -695,8 +755,8 @@
 
 
 
-(deflapfunction %symptr-value %symptr-value)
-(deflapfunction %set-symptr-value %set-symptr-value)
+(deflapfunction %symptr-value %sym-value)
+(deflapfunction %set-symptr-value %set-sym-value)
 
 (deflapfunction %set-hash-table-vector-key (vector index value)
   (gvset vector index value))
@@ -836,6 +896,12 @@
   (check-type dfloat ccl-double-float)
   (ccl-double-float (coerce int 'double-float) dfloat))
 
+(deflapfunction %short-float->double-float (sfloat dfloat)
+  (check-type sfloat short-float)
+  (check-type dfloat ccl-double-float)
+  (ccl-double-float (coerce sfloat 'double-float) dfloat))
+
+
 (deflapfunction double-float-bits (dfloat)
   (check-type dfloat ccl-double-float)
   (values (uvref dfloat 1) (uvref dfloat 0)))
@@ -855,7 +921,7 @@
 (deflapfunction %%scale-dfloat! (dfloat int result)
   (ccl-double-float (scale-float (native-double-float dfloat) int) result))
 
-;;; stuff that was in nfasload
+;;; stuff that was in nfasload.  Perhaps should load nfasload and just isolate the htab stuff?
 (deflapfunction register-package-ref (name)
   (register-package-ref name (pkg-arg name nil)))
 
@@ -872,18 +938,27 @@
 (deflapfunction %new-package-hashtable (size)
   (%new-htab size))
 
+(deflapfunction %find-pkg (name &optional end)
+  (%find-pkg name end))
+
+
 ;; I give up, everybody wants to use this, let them
 ;;;  *** TODO back out of changes of putting more stuff in nfasload to avoid defining this
 (deflapfunction %get-htab-symbol (string len htab)
-  (assert (eq len (uvsize string)))
-  (let ((hashkey (native-string string)))
-    (multiple-value-bind (symv found-p) (gethash hashkey htab)
+  (assert (<= len (uvsize string)))
+  (let ((hashkey (with-uvector-data (data string)
+                   (error "Heap vector not supported here")
+                   (coerce (if (eql len (length data)) data (subseq data 0 len)) 'string))))
+    (multiple-value-bind (symv found-p) (%htab-get hashkey htab)
       (when found-p
         (values found-p (symvector-sym symv))))))
 
 (deflapfunction %find-symbol (string len package)
   (check-type string ccl-simple-string)
-  (assert (eq len (uvsize string)))
+  (unless (eql len (uvsize string))
+    (with-uvector-data (data string)
+      (error "Heap vector not supported here")
+      (setq string (make-uvector subtag-simple-string (subseq data 0 len)))))
   (multiple-value-bind (sym where) (find-sym-in-pkg string package)
     (values sym (ccl-symbol where) -23 -17)))
 
@@ -906,6 +981,8 @@
   (check-type module ccl-simple-string)
   (pushnew module (sym-value (ccl'*modules*)) :test 'uvector-equal))
 
+(deflapfunction set-package (name)
+  (setf (sym-value (ccl-symbol '*package*)) (pkg-arg name)))
 
 (deflapfunction %class-of-instance (instance)
   (gvref (gvref instance instance.class-wrapper) %wrapper.class))
@@ -1100,13 +1177,17 @@
   (gvset fn index value))
 
 
+;;;; Heap vectors
 ;; aka Make a heap vector
 (deflapfunction fudge-heap-pointer (ptr subtag num-elts)
   (check-type subtag (unsigned-byte 8))
   (check-type num-elts (unsigned-byte 56))
+  (unless (svref *subtag-ffi-types* subtag)
+    (error "~s heap vectors not supported" (subtag-typekey subtag)))
   (let ((ptr (%macptr-ptr ptr)))
-    (setf (cffi:mem-ref ptr :uint64) (logior (ash num-elts 8) subtag))
+    (setf (cffi:mem-ref ptr :uint64) num-elts)
     (make-uvector subtag ptr)))
+
 
 ;; set ptr to point to the actual vector data
 (deflapfunction %vect-data-to-macptr (vect ptr)
@@ -1120,3 +1201,59 @@
   (with-uvector-data (data vect)
     (setf (%macptr-value ptr) data)
     (error  "Not a heap vector: ~s" vect)))
+
+(defun heap-vector-uvref (uvec index)
+  (let* ((subtag (uvector-subtag uvec))
+         (ptr (uvector-data uvec)))
+    (assert (< index (cffi:mem-ref ptr :uint64)))
+    (cffi:mem-aref ptr (svref *subtag-ffi-types* subtag) index)))
+
+(defun heap-vector-uvset (uvec index val)
+  (let* ((subtag (uvector-subtag uvec))
+         (ptr (uvector-data uvec)))
+    (assert (< index (cffi:mem-ref ptr :uint64)))
+    (setf (cffi:mem-aref ptr (svref *subtag-ffi-types* subtag) index) val)))
+
+(defun heap-vector-uvsize (uvec)
+  (let* ((ptr (uvector-data uvec)))
+    (cffi:mem-ref ptr :uint64)))
+
+
+
+(deflapfunction bogus-thing-p (thing)
+  (declare (ignore thing))
+  nil)
+
+(deflapfunction %copy-ivector-to-ivector (src src-byte-offset dest dest-byte-offset nbytes)
+  (assert (not (eq src dest))) ;; not needed
+  (let* ((utype (svref *subtag-ffi-types* (uvector-subtag src))))
+    (assert (and utype (eq utype (svref *subtag-ffi-types* (uvector-subtag dest))))) ;; not needed
+    (let ((count (case utype
+                   ((:int8 :uint8) nbytes)
+                   ((:int16 :uint16)
+                    ;; really just need to make sure when one of them is a string, we convert to characters
+                    (assert (eq (uvector-subtag src) (uvector-subtag dest)))
+                    (ash (+ nbytes 1) -1))
+                   ((:int32 :uint32) (ash (+ nbytes 3) -2))
+                   ((:int64 :uint64) (ash (+ nbytes 7) -3))
+                   (t (error "Cant copy ~s vectors" (subtag-typekey (uvector-subtag src)))))))
+      (loop for si upfrom src-byte-offset for di upfrom dest-byte-offset for n from 0 below count
+        do (setf (uvref dest di) (uvref src si))))))
+
+
+
+(deflapfunction get-saved-register-values ()
+  (values))
+
+
+(defvar *ccl-toplevel-func* nil)
+
+(deflapfunction %tcr-toplevel-function (tcr)
+  (assert (eql tcr 23)) ;; see $bs-current-tcr
+  *ccl-toplevel-func*)
+
+(deflapfunction %set-tcr-toplevel-function (tcr func)
+  (assert (eql tcr 23)) ;; see $bs-current-tcr
+  (setq *ccl-toplevel-func* func))
+
+(deflapfunction %no-thread-local-binding-marker () 'no-thread-local-binding-marker)
