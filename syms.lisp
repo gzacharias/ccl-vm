@@ -307,10 +307,18 @@
         (setf (svref vec 2) pkg))
     ref))
 
+(defun %htab-hashkey (string-or-sym &optional len)
+  (let ((string (if (ccl-simple-string-p string-or-sym)
+                  string-or-sym
+                  (sym-pname string-or-sym))))
+    (with-uvector-data (data string)
+      (error "Heap vector not supported here")
+      (coerce (if (or (null len) (eql len (length data))) data (subseq data 0 len)) 'string))))
+
 (defun find-sym-in-pkg (name pkg)
   (check-type name ccl-simple-string)
   (check-type pkg ccl-package)
-  (let ((hashkey (native-string name)) ;; conses, but it's just for bootstrapping, who cares.
+  (let ((hashkey (%htab-hashkey name))
         (pkg-vec (gvector-data pkg))
         (sym))
     (if (setq sym (%itab-get hashkey pkg-vec))
@@ -334,7 +342,7 @@
     (if (consp old)
       (unless (car old) (setf (car old) pkg))
       (unless old (setf (svref (gvector-data sym) sym.pkg-predicate) pkg))))
-  (let* ((hashkey (sym-native-pname sym)))
+  (let* ((hashkey (%htab-hashkey sym)))
     (if (eq pkg *keyword-pkg*)
       (let ((sym-vec (gvector-data sym)))
         (%etab-add hashkey (gvector-data pkg) sym)
@@ -351,7 +359,7 @@
 
 (defun export-sym-from-pkg (sym pkg)
   (check-type sym ccl-symvector)
-  (let* ((hashkey (sym-native-pname sym))
+  (let* ((hashkey (%htab-hashkey sym))
          (pkg-vec (gvector-data pkg))
          (foundsym (%itab-get hashkey pkg-vec)))
     (when foundsym

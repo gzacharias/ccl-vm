@@ -17,22 +17,23 @@
 
 (defvar *CCL-DIRECTORY*)
 
-(defun cvmload-ccl ()
-  ;; Load level-0
-  (let* ((files (sort (directory "ccl:cvmsrcs;level-0;*.cvmsrc") #'string-lessp :key #'pathname-name))
+;; Build things up to the point where in the bootstrapping version, the heap image
+;; has been loaded and all the initializations in %toplevel-function% in nfasload
+;; have been executed up.
+(defun cvm-load-level-0 (ccl-directory)
+  (setq *CCL-DIRECTORY* (truename ccl-directory)) ;; VM needs this.
+  (let* ((files (sort (directory (merge-pathnames "cvmsrcs/level-0/*.cvmsrc" *ccl-directory*))
+                      #'string-lessp :key #'pathname-name))
          (calls (loop for file in files
                   unless (string-equal (pathname-name file) "nfasload")
                   nconc (let ((*deferred-level-0-calls* (list t)))
                           (cvmload file)
                           (loop for call in (cdr (nreverse *deferred-level-0-calls*))
                             collect (list file call))))))
-    ;; However the real load happens, have to record the ccl directory so the vm can find it.
-    (SETQ *CCL-DIRECTORY* (truename "ccl:"))
-    
-    ;; Some stuff xfasload inits
-    ;; Most of this could be done before loading level-0!
+    ;; Some stuff xfasload inits at image-build time
+    ;; Most of this could be done before loading level-0, once packages exist.
     (%defvar (ccl-symbol '*package*) () 'variable *ccl-pkg*)
-    (%defvar (ccl '*ccl-package*) () 'variable *ccl-pkg*)
+    (%defvar (ccl-symbol '*ccl-package*) () 'variable *ccl-pkg*)
     (%defvar (ccl '*common-lisp-package*) () 'variable *cl-pkg*)
     (%defconstant (ccl '%unbound-function%) *unbound-function*)
     (%defvar (ccl '*keyword-package*) () 'variable *keyword-pkg*)
@@ -44,103 +45,46 @@
     ;;(setf (xload-symbol-value (xload-copy-symbol '*xload-cold-load-documentation*))
     ;;      (xload-save-list (setq *xload-cold-load-documentation*
     ;;                             (nreverse *xload-cold-load-documentation*))))
-    ;; default to unshared hash tables, lock-free-puthash seems to get an infinite loop **** TRACK THIS DOWN
+
+    ;; default to unshared hash tables, lock-free-puthash seems to get an infinite loop *** TODO **** TRACK THIS DOWN
     ;;  Have to do this before %documentation is initialized, in level-0!
     (setf (sym-value (ccl '*shared-hash-table-default*)) nil)
     (setf (sym-value (ccl '*current-process*)) 1234) ;; needed for non-shared hash tables.
     
+    ;; The "cold load" stream.
     (loop for (file fn) in calls as index upfrom 1
       do (format t "~& Call #~s (from ~s) " index file)
       do (ccl-funcall fn))
-    
+
     ;;;; TODO******* So this needs to somehow come in from the compiler, because that's who knowns where it puts it.
     (%defvar (ccl '*xload-startup-file*) () 'variable (ccl "level-1.cvmsrc"))
     (%defvar (ccl '*openmcl-svn-revision*) () 'variable nil) ;; (local-vc-revision) -- SO THIS NEEDS TO BE FROM COMPILE/XLOAD time again
     (%defvar (ccl '*optional-features*) () 'variable nil) ;(mapcar 'ccl-symbol CCL::*BUILD-TIME-OPTIONAL-FEATURES*)
-    
+
     (unbootstrap-documentation)
     ;;(unbootstrap-packages)
     ;;(%fasload *xload-startup-file*))
-    ;;  Here's what level-1.lisp would load
-    (format t "~&Level-0 loaded~%")
-    
-    ;; Here might also want to replace some l0-hash table fns with speedier versions?
-    
-    
-    ;; (l1-load "l1-cl-package") - just does CL package, which we pre-allocated.
-    (pretend-fasload "l1-utils")
-    (pretend-fasload "l1-init")
-    (pretend-fasload "l1-symhash")
-    (pretend-fasload "l1-numbers")
-    (pretend-fasload "l1-aprims")
-    ;; (l1-load "x86-callback-support")
-    (pretend-fasload "l1-callbacks")
-    (pretend-fasload "l1-sort")
-    (pretend-fasload "lists")
-    (pretend-fasload "sequences")
-    (pretend-fasload "l1-dcode")
-    (pretend-fasload "l1-clos-boot")
-    (pretend-fasload "hash")
-    (pretend-fasload "l1-clos")
-    (pretend-fasload "defstruct")
-    (pretend-fasload "dll-node")
-    (pretend-fasload "l1-unicode")
-    (pretend-fasload "l1-streams")
-    ;; Ok this does defstruct which calls definition-environment which is defined in l1-readloop.
-    ;; how does this ever work?  Ok, it only seems to call it on shared-resource-request,
-    ;; which is the first one that does an :include
-    (pretend-fasload "linux-files")
-    (pretend-fasload "chars")
-    (pretend-fasload "l1-files")
-    (let ((provide (sym-func (ccl 'provide))))
-      (ccl-funcall provide (ccl-string "SEQUENCES"))
-      (ccl-funcall provide (ccl-string "DEFSTRUCT"))
-      (ccl-funcall provide (ccl-string "CHARS"))
-      (ccl-funcall provide (ccl-string "LISTS"))
-      (ccl-funcall provide (ccl-string "DLL-NODE")))
-    (pretend-fasload "l1-typesys")
-    (pretend-fasload "sysutils")
-    ;; (l1-load "x86-threads-utils")
-    ;; Really should skip processes if skip threads...
-    (pretend-fasload "l1-lisp-threads")
-    (pretend-fasload "l1-application")
-    (pretend-fasload "l1-processes")
-    (pretend-fasload "l1-io")
-    (pretend-fasload "l1-reader")
-    (pretend-fasload "l1-readloop")
-    (pretend-fasload "l1-readloop-lds")
-    (pretend-fasload "l1-error-system")
-    (pretend-fasload "l1-events")
-    ;; (l1-load "x86-trap-support")
-    (pretend-fasload "l1-format")
-    (pretend-fasload "l1-sysio")
-    (pretend-fasload "l1-pathnames")
-    ;; *** make it so REQUIRE can find our files
-    (push (ccl "ccl:cvmsrcs;.cvmsrc")
-          (sym-value (ccl'*module-search-path*)))
-    ;; make it so LOAD (called by REQUIRE) goes thru fasload
-    (setf (sym-value (ccl'*.fasl-pathname*))
-          (ccl-funcall (ccl'pathname) (ccl ".cvmsrc")))
-    (pretend-fasload "l1-boot-lds")
-    (pretend-fasload "l1-boot-1")
-    (pretend-fasload "l1-boot-2")
-    (pretend-fasload "l1-boot-3")
-    (ccl-funcall (ccl 'require) (ccl-string "PREPARE-MCL-ENVIRONMENT"))
-    ;; This is from level-1.lisp.  (Next step will be to see if we can just load level-1 from cvmsrc!)
-    (setf (sym-value (ccl'*load-file-source-file*)) nil)
-    (setf (sym-value (ccl'*loading-toplevel-location*)) nil)
-    (ccl-funcall (ccl'%set-toplevel) (ccl'toplevel-loop))
-    (ccl-funcall (ccl'set-user-environment) t)
-    ;; This does ({THROW} {:TOPLEVEL})  There must be a catch in the kernel or somewhere that then invokes the tcr-toplevel-function.
-    (ccl-funcall (ccl'toplevel))
-    ))
+    (format t "~&Level-0 loaded~%")))
 
-;; also called from lap-%fasload.
-(defun pretend-fasload (filename)
-  (let ((file (make-pathname :name (pathname-name filename) :defaults "ccl:cvmsrcs;.cvmsrc")))
-    (if (probe-file file)
-      (progn (cvmload file) t)
-      (progn (format t "~&***SKIPPING ~s" filename) nil))))
+    
+
+;; So if we were to load LEVEL-1.cvmsrc
+;;;  - it looks up *target-backend* at COMPILE TIME, GOOD.
+;;;  - it does explicit fasloads of "L1-fasls/name.cvmsrc"  or "bin/name.cvmsrc", the cvmsrc being set at
+;;;      compile time!
+;; ****  this goes straight to pretend-fasload, and we can replace l1-fasls and bin inside pretend-fasload.
+;;;  (or could compile them into l1-fasls and bin, but that would defeat the idea of zipping it up and
+;;;   taking it anywhere.
+
+;;;  It does load (ed "ccl:l1;l1-cl-package.lisp") first.
+;;;     it needs {*common-lisp-package*} to be defined
+;;;      it does check if symbol is already exported and only adds if they aren't, so IT SHOULD BE OK
+;;;   ---- CAN TRY TO REMOVE OUR AGGRESSIVE INIT OF CL, JUST add the early symbols.
+
+(defun cvmload-ccl (&optional (ccl-directory "CCL:"))
+  (cvm-load-level-0 ccl-directory)
+  (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*))))
+
 
 ;;  When running in the VM, cvmsrc files need to be recognized as fasl files,
 ;;  so our {%fasload} function can run and do the load using cvmload.  This is
@@ -157,7 +101,7 @@
         (return (let ((*loader-table* nil)
                       (*package* (find-package :ccl-vm))
                       (cur-pkg (%sym-value (ccl'*package*)))
-                      (cur-rdtable (%sym-value (ccl'readable*))))
+                      (cur-rdtable (%sym-value (ccl'*readable*))))
                   (declare (special *loader-table*))
                   (unwind-protect
                       ;; We want to load this as a source file. There is no way to ensure that portably,
@@ -169,7 +113,7 @@
                                                                 :test 'equal)))
                         (load file))
                     (%set-sym-value (ccl'*package*) cur-pkg)
-                    (%set-sym-value (ccl'readable*) cur-rdtable) cur-rdtable)))
+                    (%set-sym-value (ccl'*readable*) cur-rdtable) cur-rdtable)))
       (retry-load () :report (lambda (s) (format s "Retry CVMLOAD ~s" file))))))
 
 
@@ -335,15 +279,15 @@
     (simple-eval expr)))
 
 ;; like $fasl-funcall but for value, it's used in load-time values.
-;;; I BELEIVE *ALL* calls to this a find-class-cell, maybe its worth breaking out,
+;;; I BELIEVE *ALL* calls to this a find-class-cell, maybe its worth breaking out,
 ;;; even just to call out to ccl.
+;;; OR conversely, do we really need $fs-istruct-cell?  can we call something in ccl?
 (defun $fs-funcall (fn)
   (fasl-trace "   ~s ~s" '$fs-funcall fn)
   ;(FORMAT *trace-OUTPUT* "~&$FS-FUNCALL ~s" (ccl-function-bslambda fn))
   (when *deferred-level-0-calls*
     (error "$fs-funcall in level-0 ~s" fn))
   (ccl-funcall fn))
-
 
 (defun $fs-istruct-cell (sym)
   (fasl-trace "   ~s ~s" '$fs-istruct-cell sym)

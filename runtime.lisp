@@ -48,10 +48,25 @@
   )
 
 (deflapfunction %fasload (namestring)
-  (pretend-fasload (native-string namestring)))
+  (let* ((filename (native-string namestring))
+         (level-1-loaded (let ((sym (ccl'*level-1-loaded*))) (and (sym-boundp sym) (%sym-value sym)))))
+    (assert (equal (pathname-type filename) "cvmsrc"))
+    (unless level-1-loaded
+      ;; While loading up CCL, ignore specified directories, the whole CCL cvmsrc is in one directory.
+      (setq filename (merge-pathnames (make-pathname :name (pathname-name filename)
+                                                     :type (pathname-type filename)
+                                                     :directory '(:relative "cvmsrcs"))
+                                      *ccl-directory*)))
+    (if (probe-file file)
+      (progn (cvmload file) t)
+      (progn
+        (if level-1-loaded
+          (error "~s not found" namestring)
+          (format t "~&***SKIPPING ~s" filename))
+        nil))))
 
-;;; ** TODO: do in lap for now so can move on, but need to figure this out.
 
+;;; ** TODO: do in lap for now so can move on, but need to figure out why it's so slow.
 #+CCL
 (deflapfunction soname-from-mach-header (header)
   (setq header (%macptr-ptr header))
@@ -941,17 +956,20 @@
 (deflapfunction %find-pkg (name &optional end)
   (%find-pkg name end))
 
-
 ;; I give up, everybody wants to use this, let them
-;;;  *** TODO back out of changes of putting more stuff in nfasload to avoid defining this
 (deflapfunction %get-htab-symbol (string len htab)
   (assert (<= len (uvsize string)))
-  (let ((hashkey (with-uvector-data (data string)
-                   (error "Heap vector not supported here")
-                   (coerce (if (eql len (length data)) data (subseq data 0 len)) 'string))))
-    (multiple-value-bind (symv found-p) (%htab-get hashkey htab)
-      (when found-p
-        (values found-p (symvector-sym symv))))))
+  (multiple-value-bind (symv found-p) (%htab-get (%htab-hashkey string len) htab)
+    (when found-p
+      (values found-p (symvector-sym symv)))))
+
+(deflapfunction %htab-remove-symbol (sym htab index)
+  (declare (ignore index))
+  (%htab-rem (%htab-hashkey sym) htab sym))
+
+(deflapfunction %htab-add-symbol (sym htab index)
+  (declare (ignore index))
+  (%htab-add (%htab-hashkey sym) htab sym))
 
 (deflapfunction %find-symbol (string len package)
   (check-type string ccl-simple-string)
