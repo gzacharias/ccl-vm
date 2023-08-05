@@ -7,15 +7,17 @@
 (import 'ccl::test-load :ccl-vm)
 (import 'ccl::test-vm :ccl-vm)
 (defun ccl::test-load ()
-  ;; Don't really understand the intended way of doing this.  Any attempt to
-  ;; use a target ends up calling FIND-BACKEND, but there is no cvm backend until
-  ;; these files are loaded, so just do it.
-  ;(load "ccl:compiler;cvm;cvm-arch.lisp")
-  ;(load "ccl:compiler;cvm;cvm-backend.lisp")
-  (cl-user::load-cvm)
-  (cvmload-ccl))
+  (cl-user::load-cvm) ;; load virtual machine - basic packages, functions.
+  (load-cvmsrcs "CCL:")) ;; now load ccl into it.
 
 (defvar *CCL-DIRECTORY*)
+
+(defparameter *loading-ccl* nil)
+
+(defun load-cvmsrcs (&optional (ccl-directory "CCL:"))
+  (let ((*loading-ccl* t))
+    (cvm-load-level-0 ccl-directory)
+    (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*)))))
 
 ;; Build things up to the point where in the bootstrapping version, the heap image
 ;; has been loaded and all the initializations in %toplevel-function% in nfasload
@@ -68,24 +70,6 @@
 
     
 
-;; So if we were to load LEVEL-1.cvmsrc
-;;;  - it looks up *target-backend* at COMPILE TIME, GOOD.
-;;;  - it does explicit fasloads of "L1-fasls/name.cvmsrc"  or "bin/name.cvmsrc", the cvmsrc being set at
-;;;      compile time!
-;; ****  this goes straight to pretend-fasload, and we can replace l1-fasls and bin inside pretend-fasload.
-;;;  (or could compile them into l1-fasls and bin, but that would defeat the idea of zipping it up and
-;;;   taking it anywhere.
-
-;;;  It does load (ed "ccl:l1;l1-cl-package.lisp") first.
-;;;     it needs {*common-lisp-package*} to be defined
-;;;      it does check if symbol is already exported and only adds if they aren't, so IT SHOULD BE OK
-;;;   ---- CAN TRY TO REMOVE OUR AGGRESSIVE INIT OF CL, JUST add the early symbols.
-
-(defun cvmload-ccl (&optional (ccl-directory "CCL:"))
-  (cvm-load-level-0 ccl-directory)
-  (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*))))
-
-
 ;;  When running in the VM, cvmsrc files need to be recognized as fasl files,
 ;;  so our {%fasload} function can run and do the load using cvmload.  This is
 ;;  accomplished by loading the cvm backend into the the VM, which makes {fasl-file-p}
@@ -114,7 +98,7 @@
                         (load file))
                     (%set-sym-value (ccl'*package*) cur-pkg)
                     (%set-sym-value (ccl'*readable*) cur-rdtable) cur-rdtable)))
-      (retry-load () :report (lambda (s) (format s "Retry CVMLOAD ~s" file))))))
+      (retry-load () :report (lambda (s) (format s "CVMLOAD ~s again" file))))))
 
 
 ;; a CVMSRC file is a bunch of toplevel calls to these $fasl functions.  The arguments

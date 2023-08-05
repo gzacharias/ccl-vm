@@ -48,21 +48,20 @@
   )
 
 (deflapfunction %fasload (namestring)
-  (let* ((filename (native-string namestring))
-         (level-1-loaded (let ((sym (ccl'*level-1-loaded*))) (and (sym-boundp sym) (%sym-value sym)))))
+  (let* ((filename (native-string namestring)))
     (assert (equal (pathname-type filename) "cvmsrc"))
-    (unless level-1-loaded
+    (when *loading-ccl*
       ;; While loading up CCL, ignore specified directories, the whole CCL cvmsrc is in one directory.
       (setq filename (merge-pathnames (make-pathname :name (pathname-name filename)
                                                      :type (pathname-type filename)
                                                      :directory '(:relative "cvmsrcs"))
                                       *ccl-directory*)))
-    (if (probe-file file)
-      (progn (cvmload file) t)
+    (if (probe-file filename)
+      (progn (cvmload filename) t)
       (progn
-        (if level-1-loaded
-          (error "~s not found" namestring)
-          (format t "~&***SKIPPING ~s" filename))
+        (if *loading-ccl*
+          (format t "~&***SKIPPING ~s" filename)
+          (error "~s not found" namestring))
         nil))))
 
 

@@ -417,23 +417,11 @@
 (defparameter *os-pkg*      (initial-pkg '("CVM-DARWIN64" "OS") '("COMMON-LISP")))
 (defparameter *ffi-pkg*     (initial-pkg '("CVMDARWIN-FFI") ()))
 
-;; Initialize the COMMON-LISP package..  Assume our host is compliant and just copy theirs.
-;; Note this doesn't set up flags, that should happen as we load.
-(do-external-symbols (native-sym :common-lisp)
-  (let* ((native-pname (symbol-name native-sym))
-         (pname (ccl-string native-pname)))
-    (assert (not (sym-in-pkg-p pname *cl-pkg*)))
-    (add-sym-to-pkg (let ((early (assoc native-pname *early-ccl-syms* :test 'equal)))
-                      (or (when early
-                            (setq *early-ccl-syms* (remove early *early-ccl-syms*))
-                            (cdr early))
-                          (make-ccl-symvector pname)))
-                    *cl-pkg*
-                    t)))
-
 (loop while *early-ccl-syms*
-  for (nil . sym)  = (pop *early-ccl-syms*)
-  do (add-sym-to-pkg sym *ccl-pkg*)
+  for (pname . sym)  = (pop *early-ccl-syms*)
+  do (add-sym-to-pkg sym (if (eq (nth-value 1 (find-symbol pname :common-lisp)) :external)
+                           *cl-pkg*
+                           *ccl-pkg*))
   finally (makunbound '*early-ccl-syms*))
 
 
@@ -443,7 +431,6 @@
 ;;  symbols are actually CL symbols and are normally just inherited by CCL. In the bootstrapping
 ;;  version, they are also present in CCL because, well, they have always been and so always will be.
 ;;  Since we create the package from scratch, we have to do it explicitly.
-
 (add-sym-to-pkg (find-sym-in-pkg (ccl-string "ADD-METHOD") *cl-pkg*) *ccl-pkg*)
 (add-sym-to-pkg (find-sym-in-pkg (ccl-string "COMPUTE-APPLICABLE-METHODS") *cl-pkg*) *ccl-pkg*)
 (add-sym-to-pkg (find-sym-in-pkg (ccl-string "METHOD-QUALIFIERS") *cl-pkg*) *ccl-pkg*)
@@ -462,8 +449,7 @@
         (if (keywordp symbol)
           (find-or-make-sym name *keyword-pkg*)
           (if (eq (find-symbol native-name :common-lisp) symbol)
-            (or (find-sym-in-pkg name *cl-pkg*)
-                (error "Unknown CL symbol ~s" symbol))
+            (find-or-make-sym name *cl-pkg*)
             (progn
               (assert (eq (symbol-package symbol) *native-package*))
               (find-or-make-sym name *ccl-pkg*))))))))
