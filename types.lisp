@@ -24,8 +24,27 @@
 (defmacro with-uvector-data ((var obj) heap-vector-body &body body)
   `(let ((,var (uvector-data ,obj)))
      (if (typep ,var 'cffi:foreign-pointer)
-       ,heap-vector-body
+       ,(if (eq heap-vector-body :error)
+          '(error "Heap vectors not supported here")
+          heap-vector-body)
        (progn ,@body))))
+
+(defconstant arrayh.rank 0)
+(defconstant arrayh.physsize 1)
+(defconstant arrayh.data-vector 2)
+(defconstant arrayh.displacement 3)
+(defconstant arrayh.flags 4)
+(defconstant arrayh.first-dimension 5)
+
+(defconstant array.flags-subtag-byte (byte 8 8))
+
+(defconstant vectorh.logsize 0) ;; fill pointer or physsize
+(defconstant vectorh.physsize arrayh.physsize)
+(defconstant vectorh.data-vector arrayh.data-vector)
+(defconstant vectorh.displacement arrayh.displacement)
+(defconstant vectorh.flags arrayh.flags)
+
+
 
 (defparameter *subtag-consers* ())
 
@@ -202,7 +221,7 @@
   (multiple-value-bind (mantissa exp sign) (integer-decode-float float)
     (multiple-value-bind (loword hiword) (dfloat-encode mantissa exp (< sign 0))
       (if result
-        (with-uvector-data (vec result) (error "Heap vector double-float not supported")
+        (with-uvector-data (vec result) :error
           (setf (svref vec 0) loword (svref vec 1) hiword)
           result)
         (make-uvector subtag-double-float (vector loword hiword))))))
@@ -469,6 +488,13 @@
     (cffi:foreign-pointer (make-ccl-macptr obj))
     (t (error "Don't know how to cclify ~s" obj))))
         
+;; For interactive use
+(defun ccall (sym-or-func &rest args)
+  (ccl-funcall (ccl sym-or-func) (mapcar #'ccl args)))
+
+
+
+
 (defun ccl-number (obj)
   (typecase obj
     ((or ccl-fixnum single-float) obj)

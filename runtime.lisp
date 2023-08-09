@@ -434,8 +434,7 @@
   (let ((oldlen (uvsize bignum)))
     (assert (<= newlen oldlen))
     (unless (eql newlen oldlen)
-      (with-uvector-data (vec bignum)
-        (error "Can't %set-bignum-length of heap vector ~s" bignum)
+      (with-uvector-data (vec bignum) :error
         (setf (uvector-data bignum) (subseq vec 0 newlen))))))
   
 (deflapfunction %bignum-hash (bignum)
@@ -467,16 +466,14 @@
 (deflapfunction %multiply-and-add-fixnum-loop (len64 bignum fixnum result)
   (declare (ignore len64))
   (check-type fixnum fixnum)
-  (with-uvector-data (resultv result)
-    (error "Heap vector bignums not supported")
+  (with-uvector-data (resultv result) :error
     (let* ((val (native-integer bignum))
            (res (* val fixnum)))
       (data-for-bignum res resultv)
       result)))
 
 (defun multiply-and-add-loop (bignum mult result)
-  (with-uvector-data (resultv result)
-    (error "Heap vector bignums not supported")
+  (with-uvector-data (resultv result) :error
     (let* ((val (native-integer bignum))
            (res (* val mult)))
       (data-for-bignum res resultv)
@@ -484,8 +481,7 @@
 
 (deflapfunction %multiply-and-add-loop64 (x y result i len-y) ;; x[i] * y
   (declare (ignore len-y))
-  (with-uvector-data (resultv result)
-    (error "Heap vector bignums not supported")
+  (with-uvector-data (resultv result) :error
     (let* ((pos (* i 2))
            (lo (REQUIRE-TYPE (uvref x pos) '(unsigned-byte 32)))
            (hi (REQUIRE-TYPE (if (< (1+ pos) (uvsize x)) (uvref x (1+ pos)) 0) '(UNSIGNED-BYTE 32)))
@@ -522,10 +518,12 @@
 
 (deflapfunction %get-gc-count () 17)
 
-;; This gets big, because there is an eq hash table of functions to lfun names.
+;;;
 ;;; TODO THIS NEEDS TO BE WEAK  Check weak support in sbcl/lispworks
-;;; This is basically a big hash table of all the CCL objects that are ever
-;;; stored in an EQ hash table, heh.
+;;; This is basically a big hash table of all the CCL objects that are ever stored in an EQ hash table.
+;;; **TODO: add a hash code slot to ccl-uvector and get rid of this...
+;; This gets big, because there is an eq hash table of functions to lfun names.
+;; (at end of loading ccl: (CCL-STRUCT . 2) (CCL-SIMPLE-VECTOR . 2) (CCL-PACKAGE . 9) (CONS . 92) (CCL-FUNCTION . 7800)
 (defparameter *fake-addresses-table* (make-hash-table :test 'eq))
 
 ;; for instance hash, the address is just used as an initial hash, but
@@ -585,6 +583,15 @@
         (break "fast-mod-3 ~s ~s ~s our ~s ccl ~s"
                number divisor recip res (if (fixnump cres) cres (list 'bogus (ccl::strip-tag-to-fixnum cres))))))
     res))
+
+(deflapfunction %array-header-data-and-offset (array)
+  (let ((offset 0))
+    (loop while (let ((subtag (uvector-subtag array)))
+                  (or (eql subtag subtag-vector-header)
+                      (eql subtag subtag-array-header)))
+      do (incf offset (gvref array arrayh.displacement))
+      do (setq array (gvref array arrayh.data-vector)))
+    (values array offset)))
 
 (defun kernel-import-malloc (size)
   (make-ccl-macptr (cffi:foreign-alloc :int8 :count size)))
@@ -653,17 +660,20 @@
   (buf :pointer)
   (count ccl-ffi::size_t))
 
-(defun kernel-import-lisp-lseek (fd offset whence)
-  (ff-lseek fd offset whence))
+(cffi:defcfun (ff-write "write") ccl-ffi::ssize_t
+  (fd :int)
+  (buf :pointer)
+  (count ccl-ffi::size_t))
 
-(defun kernel-import-lisp-open (ptr flags mode)
-  (ff-open (%macptr-ptr ptr) flags mode))
+(defun kernel-import-lisp-lseek (fd offset whence) (ff-lseek fd offset whence))
 
-(defun kernel-import-lisp-close (fd)
-  (ff-close fd))
+(defun kernel-import-lisp-open (ptr flags mode) (ff-open (%macptr-ptr ptr) flags mode))
 
-(defun kernel-import-lisp-read (fd buf count)
-  (ff-read fd (%macptr-ptr buf) count))
+(defun kernel-import-lisp-close (fd) (ff-close fd))
+
+(defun kernel-import-lisp-read (fd buf count) (ff-read fd (%macptr-ptr buf) count))
+
+(defun kernel-import-lisp-write (fd buf count) (ff-write fd (%macptr-ptr buf) count))
 
 
 (defun kernel-import-lisp-gettimeofday (ptimeval ptz)
@@ -778,8 +788,7 @@
 
 (deflapfunction %string-hash (start str len)
   (check-type str ccl-simple-string)
-  (with-uvector-data (vec str)
-    (error "Should implement  ~s" `(heap-vector-string-hash ,str))
+  (with-uvector-data (vec str) :error
     (loop for hash = 0 then (logxor (logior (logand (ash hash 5) u32-mask) (ash hash -27))
                                     (char-code (aref vec index)))
       for index from start below len
@@ -973,21 +982,18 @@
 (deflapfunction %find-symbol (string len package)
   (check-type string ccl-simple-string)
   (unless (eql len (uvsize string))
-    (with-uvector-data (data string)
-      (error "Heap vector not supported here")
+    (with-uvector-data (data string) :error
       (setq string (make-uvector subtag-simple-string (subseq data 0 len)))))
   (multiple-value-bind (sym where) (find-sym-in-pkg string package)
-    (values sym (ccl-symbol where) -23 -17)))
+    (values sym (ccl-symbol where))))
 
 (deflapfunction  %insert-symbol (symbol package i e)
-  (assert (and (eq i -23) (eq e -17))) ;; make sure it's coming straight from %find-symbol
+  (declare (ignore i e))
   (add-sym-to-pkg symbol package))
 
-(deflapfunction %add-symbol (pname pkg internal-idx external-idx &optional force-export)
-  (when force-export (error "FORCE-EXPORT not implemented yet"))
-  (assert (and (eql internal-idx -23) (eql external-idx -17)))
-  (add-sym-to-pkg (make-ccl-symvector pname) pkg))
-
+(deflapfunction %add-symbol (pname pkg i e &optional force-export)
+  (declare (ignore i e))
+  (add-sym-to-pkg (make-ccl-symvector pname) pkg force-export))
 
 (deflapfunction %export-symbol (sym package)
   (export-sym-from-pkg (sym-symvector sym) package)
@@ -1022,8 +1028,7 @@
 (deflapfunction %init-misc (val uvector)
   (if (ccl-simple-string-p uvector)
     (unless (characterp val) (setq val (code-char val))))
-  (with-uvector-data (data uvector)
-    (error "Should implement ~s" `(heap-vector-init ,val ,uvector))
+  (with-uvector-data (data uvector) :error
     (loop for i from 0 below (length data) do (setf (svref data i) val))))
 
 
@@ -1237,6 +1242,7 @@
 
 
 
+
 (deflapfunction bogus-thing-p (thing)
   (declare (ignore thing))
   nil)
@@ -1274,3 +1280,58 @@
   (setq *ccl-toplevel-func* func))
 
 (deflapfunction %no-thread-local-binding-marker () 'no-thread-local-binding-marker)
+
+;;;; standard io streams
+
+(defparameter *native-streams* (vector 
+                                ; input
+                                #+ccl ccl::*stdin*
+                                #+sbcl sb-sys:*stdin*
+                                #-(or ccl sbcl) *standard-input*
+                                ; output
+                                #+ccl ccl::*stdout*
+                                #+sbcl sb-sys:*stdout*
+                                #-(or ccl sbcl) *standard-output*
+                                ; error
+                                #+ccl ccl::*stderr*
+                                #+sbcl sb-sys:*stderr*
+                                #-(or ccl sbcl) *error-output*
+                               ; tty
+                                #+sbcl sb-sys:*tty*
+                                #-(or sbcl) *terminal-io*
+                                ))
+
+(deflapfunction native-interactive-stream-p (which)
+  (interactive-stream-p (aref *native-streams* which)))
+
+(deflapfunction native-stream-read-char (which)
+  (read-char (aref *native-streams* which) nil :eof))
+
+(defmethod native-stream-read-byte (which)
+  (read-byte (aref *native-streams* which) nil :eof))
+
+(deflapfunction native-stream-unread-char (which char)
+  (unread-char char (aref *native-streams* which)))
+
+(deflapfunction native-stream-read-char-no-hang (which)
+  (read-char-no-hang (aref *native-streams* which) nil :eof))
+
+(deflapfunction native-stream-write-char (which c)
+  (write-char c (aref *native-streams* which)))
+
+(deflapfunction native-stream-line-column (which)
+  ;; Assume everybody makes gray streams available to cl-user...
+  (cl-user::stream-line-column (aref *native-streams* which)))
+  
+(deflapfunction native-stream-set-column (which column)
+  (if (eql column 0)
+    (fresh-line (aref *native-streams* which))
+    ;; This is not a gray streams function
+    ;;#+ccl (ccl::stream-set-column  (aref *native-streams* which) column)
+    (break "someone is setting column!")))
+
+(deflapfunction native-stream-force-output (which)
+  (force-output (aref *native-streams* which)))
+
+(deflapfunction native-stream-finish-output (which)
+  (finish-output (aref *native-streams* which)))

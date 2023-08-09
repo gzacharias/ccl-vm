@@ -74,8 +74,8 @@
     (declare (ignore name))
     (destructuring-bind (inherited req-lvs opt-lvs rest-lv keys-lvs bits) argspecs
       (declare (ignore bits)) 
-      (let ((values-var (gensym "VALUES"))
-            (args-var (gensym "ARGS"))
+      (let ((values-var (make-symbol "VALUES"))
+            (args-var (make-symbol "ARGS"))
             (rev-inits nil)
             (special-bindings nil))
         (flet ((bind-form (lv value-form)
@@ -87,16 +87,19 @@
                      `(progn
                         (setq ,old-var (%sym-value ',lv))
                         (%set-sym-value ',lv ,value-form))))))
-          (push `(assert (>= (length ,values-var) ,(length inherited))) rev-inits)
+          (when (or inherited req-lvs)
+            (push `(assert (>= (length ,values-var) ,(+ (length inherited) (length req-lvs)))) rev-inits))
           (loop for lv in inherited
             do (check-type lv fixnum)
             do (push `(setf (bsenv-lvcell ,*env-var-name* ,lv) (pop ,values-var)) rev-inits))
-          (push `(assert (>= (length ,values-var) ,(length req-lvs))) rev-inits)
           (loop for lv in req-lvs do (push (bind-form lv `(pop ,values-var)) rev-inits))
           (loop while opt-lvs
             for (opt-lv init supp-lv) = (pop opt-lvs)
-            do (push (bind-form opt-lv `(if ,values-var (pop ,values-var) ,init)) rev-inits)
-            when supp-lv do (push (bind-form supp-lv `(not (null ,values-var))) rev-inits))
+            do (push (bind-form opt-lv `(if ,values-var (car ,values-var) ,init)) rev-inits)
+            when supp-lv do (push (bind-form supp-lv `(not (null ,values-var))) rev-inits)
+            do (push `(setq ,values-var (cdr ,values-var)) rev-inits))
+          (when (and (not rest-lv) (not keys-lvs))
+            (push `(assert (null ,values-var)) rev-inits))
           (when rest-lv
             (push (bind-form rest-lv `(copy-list ,values-var)) rev-inits))
           (when keys-lvs
@@ -638,6 +641,9 @@
   #+vmthreads `(let ((*interrupt-level* ,level)) ,body)
   (declare (ignore level))
   body)
+
+(defbseval $bs-current-frame-ptr () *env-var-name*)
+
 
 (defbseval $bs-unbound-marker () `',*unbound-marker*)
 (defbseval $bs-slot-unbound-marker () `',*slot-unbound-marker*)

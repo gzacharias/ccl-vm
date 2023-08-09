@@ -14,10 +14,17 @@
 
 (defparameter *loading-ccl* nil)
 
+;;; *** TODO: make disassemble do a pprint of the bslambda! or the bslambda-lambda
+
+;;; 5 mins
 (defun load-cvmsrcs (&optional (ccl-directory "CCL:"))
   (let ((*loading-ccl* t))
     (cvm-load-level-0 ccl-directory)
-    (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*)))))
+    ;; Ok, so this sets toplevel function at the end then throws to toplevel...
+    ;; The toplevel func basically calls #'toplevel-loop
+    (catch (ccl-symbol :toplevel)
+      (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*)))))
+  (format t "~&CCL-VM LOADED, Should run ~s" *ccl-toplevel-func*))
 
 ;; Build things up to the point where in the bootstrapping version, the heap image
 ;; has been loaded and all the initializations in %toplevel-function% in nfasload

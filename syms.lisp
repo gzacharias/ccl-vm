@@ -232,7 +232,7 @@
   (destructuring-bind (uvec count . hash) htab
     ;; The vector is there for iteration, so don't shift its contents around.
     (let* ((vec (gvector-data uvec))
-           (sympos (position sym vec)))
+           (sympos (position (sym-symvector sym) vec)))
       (if (not sympos) ;; shouldn't happen but at least make sure we're consistent
         (assert (not (gethash hashkey hash)))
         (progn
@@ -271,8 +271,7 @@
 (defun %find-pkg (name &optional end)
   (check-type name ccl-simple-string)
   (when (and end (not (eql end (uvsize name))))
-    (with-uvector-data (data name)
-      (error "Heap vector not supported here")
+    (with-uvector-data (data name) :error
       (setq name (make-uvector subtag-simple-string (subseq data 0 end)))))
   (find name (sym-value *all-packages-sym*) :test #'pkg-name-p))
 
@@ -311,8 +310,7 @@
   (let ((string (if (ccl-simple-string-p string-or-sym)
                   string-or-sym
                   (sym-pname string-or-sym))))
-    (with-uvector-data (data string)
-      (error "Heap vector not supported here")
+    (with-uvector-data (data string) :error
       (coerce (if (or (null len) (eql len (length data))) data (subseq data 0 len)) 'string))))
 
 (defun find-sym-in-pkg (name pkg)
@@ -417,13 +415,24 @@
 (defparameter *os-pkg*      (initial-pkg '("CVM-DARWIN64" "OS") '("COMMON-LISP")))
 (defparameter *ffi-pkg*     (initial-pkg '("CVMDARWIN-FFI") ()))
 
-(loop while *early-ccl-syms*
-  for (pname . sym)  = (pop *early-ccl-syms*)
-  do (add-sym-to-pkg sym (if (eq (nth-value 1 (find-symbol pname :common-lisp)) :external)
-                           *cl-pkg*
-                           *ccl-pkg*))
-  finally (makunbound '*early-ccl-syms*))
+;; Initialize the COMMON-LISP package..  Assume our host is compliant and just copy theirs.
+;;  Has to happen before we start loading references to CL symbols in ccl package files...
+(do-external-symbols (native-sym :common-lisp)
+  (let* ((native-pname (symbol-name native-sym))
+         (pname (ccl-string native-pname)))
+    (assert (not (sym-in-pkg-p pname *cl-pkg*)))
+    (add-sym-to-pkg (let ((early (assoc native-pname *early-ccl-syms* :test 'equal)))
+                      (or (when early
+                            (setq *early-ccl-syms* (remove early *early-ccl-syms*))
+                            (cdr early))
+                          (make-ccl-symvector pname)))
+                    *cl-pkg*
+                    t)))
 
+(loop while *early-ccl-syms*
+  for (nil . sym)  = (pop *early-ccl-syms*)
+  do (add-sym-to-pkg sym *ccl-pkg*)
+  finally (makunbound '*early-ccl-syms*))
 
 ;; So there is this weird thing:
 ;;  In ccl-export-syms, we export symbols from CCL.
@@ -449,7 +458,8 @@
         (if (keywordp symbol)
           (find-or-make-sym name *keyword-pkg*)
           (if (eq (find-symbol native-name :common-lisp) symbol)
-            (find-or-make-sym name *cl-pkg*)
+            (or (find-sym-in-pkg name *cl-pkg*)
+                (error "Unknown CL symbol ~s" symbol))
             (progn
               (assert (eq (symbol-package symbol) *native-package*))
               (find-or-make-sym name *ccl-pkg*))))))))
