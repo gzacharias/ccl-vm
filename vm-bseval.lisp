@@ -710,20 +710,6 @@
 
 ;;; **TODO: macptr value should be a native pointer! a lot less consing then.
 
-(defun $ff-to-ffi (type)
-  (ecase type
-    ($ff-signed64 :int64)
-    ($ff-unsigned64 :uint64)
-    ($ff-signed32 :int32)
-    ($ff-unsigned32 :uint32)
-    ($ff-signed16 :int16)
-    ($ff-unsigned16 :uint16)
-    ($ff-unsigned8 :uint8)
-    ($ff-signed8 :int8)
-    ($ff-address :pointer)
-    ($ff-fixnum :int64)
-    ($ff-void :void)))
-
 (defun ffi-to-ccl (type form)
   (case type
     ((:int64 :uint64) `(ccl-number ,form))
@@ -737,13 +723,11 @@
     (t form)))
 
 (defbseval $bs-macptr-get (ptr byte-offset ff-type)
-  (let ((type ($ff-to-ffi ff-type)))
-    (ffi-to-ccl type `(cffi:mem-ref (%macptr-ptr ,ptr) ,type ,byte-offset))))
+  (ffi-to-ccl ff-type `(cffi:mem-ref (%macptr-ptr ,ptr) ,ff-type ,byte-offset)))
 
 
 (defbseval $bs-macptr-set (ptr byte-offset ff-type val)
-  (let ((type ($ff-to-ffi ff-type)))
-    `(setf (cffi:mem-ref (%macptr-ptr ,ptr) ,type ,byte-offset) ,(ccl-to-ffi type val))))
+  `(setf (cffi:mem-ref (%macptr-ptr ,ptr) ,ff-type ,byte-offset) ,(ccl-to-ffi ff-type val)))
   
 
 #+NOTYET (defbseval $bs-%reference-external-entry-point (arg) (%reference-external-entry-point arg))
@@ -756,28 +740,26 @@
   (cassert (string= "KERNEL-IMPORT-" name :end2 (length "KERNEL-IMPORT-")))
   (flet ((typecheck-for (ff-type form)
            `(require-type ,form ',(ecase ff-type
-                                    ($ff-address 'ccl-macptr)
-                                    (($ff-unsigned64 $ff-signed64) 'ccl-integer)
-                                    ($ff-signed32 '(signed-byte 32))
-                                    ($ff-unsigned32 '(unsigned-byte 32))
-                                    ($ff-signed16 '(signed-byte 16))
-                                    ($ff-unsigned16 '(unsigned-byte 16))
-                                    ($ff-void 't)))))
+                                    (:pointer 'ccl-macptr)
+                                    ((:uint64 :int64) 'ccl-integer)
+                                    (:int32 '(signed-byte 32))
+                                    (:uint32 '(unsigned-byte 32))
+                                    (:int16 '(signed-byte 16))
+                                    (:uint16 '(unsigned-byte 16))
+                                    (:void 't)))))
     (typecheck-for resultspec
                    `(funcall ',(intern name *native-package*)
                              ,@(loop for argspec in argspecs for argval in argvals
                                  collect (typecheck-for argspec argval))))))
 
-(defbseval $bs-ff-call (entry argspecs argvals resultspec)
-  (cassert (= (length argspecs) (length argvals)))
+(defbseval $bs-ff-call (entry argtypes argvals res-type)
+  (cassert (= (length argtypes) (length argvals)))
   (let ((sym (and (consp entry)
                   (eq (car entry) '$bs-symbol-value)
                   (bs-unquote (cadr entry)))))
     (check-type sym ccl-symvector))
-  (let* ((res-type ($ff-to-ffi resultspec))
-         (form `(cffi:foreign-funcall-pointer (cffi:make-pointer ,entry) ()
-                                              ,@(loop for argspec in argspecs for val in argvals
-                                                  as type = ($ff-to-ffi argspec)
+  (let* ((form `(cffi:foreign-funcall-pointer (cffi:make-pointer ,entry) ()
+                                              ,@(loop for type in argtypes for val in argvals
                                                   collect type
                                                   collect (case type
                                                             ((:int64 :uint64) `(native-number ,val))
