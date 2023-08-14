@@ -1,17 +1,9 @@
 (in-package :ccl-vm)
 
-;; While we start up, we use this bootstrapping version of packages, until at some point
-;;  in the loading, we'll turn them off and start using the native CCL packages with their
-;; hash codes.  INTERN and %PKG-REF-INTERN (comes out of compiler optimizer) are in l1-symhash,
-;;   They call %find-symbol and %add-symbol which are in level-0;nfasload.  So somewhere along
-;; in there we need to switch the representation to one that matches CCL.
-
 ;;;; *** TODO: eventually might want to be able to reload these files without clobbering the VM,
 ;;;;   so should move all the startup things into a start-vm function.
 
 
-;; This is defined in x8664-arch, but there is plenty of code around that accesses
-;; it as target::xxx, so really need all these slots to be there.
 (defconstant sym.pname 0)
 (defconstant sym.vcell 1)
 (defconstant sym.fcell 2)
@@ -34,21 +26,6 @@
 (defconstant $sym_fbit_defunct (+ 8 $sym_vbit_defunct))
 (defconstant $sym_fbit_constant_fold (+ 8 $sym_vbit_constant))
 (defconstant $sym_fbit_fold_subforms (+ 8 $sym_vbit_global))
-
-(def-uvector-print-text :symvector sym-print-text (sym)
-  (declare (special *cl-pkg* *ccl-pkg* *keyword-pkg*))
-  (setq sym (sym-symvector sym))
-  (let ((pkg (sym-pkg sym)))
-    (if (eq pkg *cl-pkg*)
-      (format nil "CL:~a" (sym-native-pname sym))
-      (if (eq pkg *ccl-pkg*)
-        (format nil "CCL::~a" (sym-native-pname sym))
-        (if (eq pkg *keyword-pkg*)
-          (format nil ":~a" (sym-native-pname sym))
-          (if (null pkg)
-            (format nil "#:~a" (sym-native-pname sym))
-            (format nil "~a::~s" (native-string (pkg-name (sym-pkg sym))) (sym-native-pname sym))))))))
-
 
 (defun make-ccl-symvector (pname &optional (flags 0) (value *unbound-marker*))
   (check-type pname ccl-simple-string)
@@ -73,8 +50,7 @@
 (def-early-sym *nil-sym* "NIL" (logior (ash 1 $sym_vbit_special) (ash 1 $sym_vbit_constant)) nil)
 (def-early-sym *t-sym* "T" (logior (ash 1 $sym_vbit_special) (ash 1 $sym_vbit_constant)) T)
 
-(declaim (inline sym-symvector symvector-sym))
-(defun sym-symvector (sym)
+(defun-inline sym-symvector (sym)
   (if (null sym) *nil-sym*
     (if (eq sym t) *t-sym*
       sym)))
@@ -89,6 +65,21 @@
 
 (defun sym-native-pname (sym)
   (native-string (sym-pname sym)))
+
+(def-uvector-print-text :symvector sym-print-text (sym)
+  (declare (special *cl-pkg* *ccl-pkg* *keyword-pkg*))
+  (setq sym (sym-symvector sym))
+  (let ((pkg (sym-pkg sym)))
+    (if (eq pkg *cl-pkg*)
+      (format nil "CL:~a" (sym-native-pname sym))
+      (if (eq pkg *ccl-pkg*)
+        (format nil "CCL::~a" (sym-native-pname sym))
+        (if (eq pkg *keyword-pkg*)
+          (format nil ":~a" (sym-native-pname sym))
+          (if (null pkg)
+            (format nil "#:~a" (sym-native-pname sym))
+            (format nil "~a::~s" (native-string (pkg-name (sym-pkg sym))) (sym-native-pname sym))))))))
+
 
 ;; Since we're single-threaded, there is only one value, and that is the global value!
 (defun %sym-value (sym)

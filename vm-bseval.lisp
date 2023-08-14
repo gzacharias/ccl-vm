@@ -21,16 +21,20 @@
         (*print-level* (min (or *print-level* 2) 2)))
     (format stream "<VCELL [~s]>" value)))
 
-;; Don't ever need the parent, but it's useful for debugging as it gives a full backtrace.
-(defstruct bsenv
-  (parent nil :type (or bsenv null) :read-only t)
-  (self nil :read-only t)
-  (locals #() :type (simple-array ccl-vcell (*)) :read-only t))
+(def-uvector-subtype :call-frame (bsenv (:constructor %make-bsenv) (:subtag-conser nil))
+  (args nil :type list :read-only t) ;; for backtrace
+  (parent nil :type (or bsenv null) :read-only t) ;; for backtrace
+  (func nil :read-only t))
+
+(defun make-bsenv (parent-env func args num-locals)
+  (%make-bsenv :parent parent-env :func func :args args :data (make-array num-locals)))
+
+(defun-inline bsenv-locals (bsenv) (gvector-data bsenv))
 
 (defmethod print-object ((env bsenv) stream)
   (print-unreadable-object (env stream :type t :identity nil)
     (let ((parents (loop for penv = env then (bsenv-parent penv) while penv
-                     as self = (bsenv-self penv)
+                     as self = (bsenv-func penv)
                      collect (if (consp self) (list (car self) (cadr self)) self))))
       (format stream "~s from ~s, ~s locals"
               (car parents)
@@ -67,6 +71,10 @@
   (eval `(let ((,*env-var-name* ,env))
            (declare (ignorable ,*env-var-name*))
            ,form)))
+
+(defun bslambda-name (bslambda) (bs-unquote (nth 1 bslambda)))
+(defun bslambda-argspecs (bslambda) (nth 2 bslambda))
+
 
 ;; Why not do this at compile time?  Because don't want the compiler using native lisp calls so can be loaded by non-lisp vm's?
 (defun bslambda-lambda (bslambda)
@@ -107,7 +115,7 @@
                    (key-val-var (and keys-lvs (gensym "KEY-VAL")))
                    (key-inits nil))
               (loop for (key key-lv init supp-lv) in keys-lvs
-                do (push (bind-form key-lv `(if (eq (setq ,key-val-var (getf ,values-var ',key 'not-found)) 'not-found)
+                do (push (bind-form key-lv `(if (eq (setq ,key-val-var (getf ,values-var ',(bs-unquote key) 'not-found)) 'not-found)
                                               ,init ,key-val-var))
                          key-inits)
                 when supp-lv do (push (bind-form supp-lv `(not (eq ,key-val-var 'not-found))) key-inits)
@@ -130,7 +138,7 @@
                                     (%set-sym-value ',sym ,var)))))))
 
         `(lambda (parent-env self ,args-var)
-           (let ((,*env-var-name* (make-bsenv :parent parent-env :self self :locals (make-array ,num-vars)))
+           (let ((,*env-var-name* (make-bsenv parent-env self ,args-var ,num-vars))
                  (,values-var ,args-var))
              (declare (ignorable ,*env-var-name*))
              ,body))))))
@@ -152,8 +160,17 @@
      (defmacro ,op-name ,arglist ,@body)))
 
 
-
-
+(macrolet ((not-implemented (&rest op-names)
+             `(progn
+                ,@(mapcar (lambda (op-name)
+                            `(defbseval ,op-name (&rest args)
+                               (list 'error "~s not implemented yet"
+                                     (list 'cons '',op-name (list 'quote args)))))
+                          op-names))))
+  (not-implemented $bs-debug-trap
+                   $bs-complex-realpart
+                   $bs-complex-imagpart
+                   $bs-make-complex))
 
 (defbseval $bs-lexpr-args (rest-var-index)
   `(init-lexpr-args (bsenv-lvalue ,*env-var-name* ,rest-var-index)))
@@ -172,7 +189,8 @@
     `(let ((,_address ,address)
            (,_offset ,offset))
        (if (typep ,_address 'fixnum)
-         (%lisp-word-ref ,_address ,_offset)
+         ;(%lisp-word-ref ,_address ,_offset)
+         (error "%LISP-WORD-REF not supported")
          (lexpr-ref ,_address ,_offset)))))
 
 (defun lexpr-ref (vec offset)
@@ -180,7 +198,7 @@
   (gvref vec offset))
 
 (defbseval $bs-this-function ()
-  `(bsenv-self ,*env-var-name*))
+  `(bsenv-func ,*env-var-name*))
 
 
 (defbseval $bs-lref (index)
@@ -192,6 +210,12 @@
 (defbseval $bs-quote (object)
   (check-type object ccl-object)
   `(quote ,object))
+
+(defun bs-unquote (form)
+  (assert (and (consp form)
+               (eq (car form) '$bs-quote)
+               (null (cddr form))))
+  (cadr form))
 
 
 (defbseval $bs-require-fixnum (obj) `(require-type ,obj 'ccl-fixnum))
@@ -348,6 +372,10 @@
              collect `(bsenv-lbind ,*env-var-name* ,var-index ,var)))
        ,body)))
 
+(defbseval $bs-mvcall (fn &rest val-forms)
+  `(apply-in-environment ,*env-var-name* ,fn
+                         (nconc ,@(mapcar (lambda (form) `(multiple-value-list ,form)) val-forms))))
+
 (defbseval $bs-multiple-value-prog1 (val-form other-form)
   `(multiple-value-prog1 ,val-form ,other-form))
 
@@ -364,47 +392,37 @@
 (defvar *trace-funcall* nil)
 
 ;;; **TODO: use when-let etc!
-           ;;; TODO: need accessor macros for BSLAMBDA'S!
-
-(defun funcall-in-environment (env fn-or-sym &rest args)
-  (apply-in-environment env fn-or-sym args))
-
-(defun apply-in-environment (env fn-or-sym args)
-  ;;; *** TEMP UNTIL I figure out what's going on.
-  (let* ((fn (ensure-func fn-or-sym))
-         (bits (ccl-function-bits fn)))
-    (when (and (logbitp $lfbits-method-bit bits)
-               (logbitp $lfbits-nextmeth-bit bits))
-      (break "Calling fn ~s with args ~s not with  magic entry" fn args))
-    (apply-in-environment-KNOWN-METHOD env fn-or-sym args)))
 
 (defun compile-native-function (ccl-name lambda)
   (multiple-value-bind (res warnings-p failure-p) (compile 'ccl-fn lambda)
     (when failure-p (error "compilation failed on ~s" ccl-name))
     (when warnings-p      ;; All the warnings complained of errors in CCL-FN, give a hit of real name
-      (format t "in compilation of ~s." ccl-name))
+      (format t "~&in compilation of ~s. ~%" ccl-name))
     (setf res (fdefinition res))
     #+ccl (ccl::lfun-name res `(ccl-fn ,(or (ignore-errors (native ccl-name)) ccl-name)))
     res))
 #+hemlock (hemlock::defindent "compile-native-function" 1)
 
-(defun apply-in-environment-KNOWN-METHOD (env fn-or-sym args)
+(defun funcall-in-environment (env fn-or-sym &rest args)
+  (apply-in-environment env fn-or-sym args))
+
+(defun apply-in-environment (env fn-or-sym args)
   (when *trace-funcall*
     (format t "~&APPLY ~s to ~s" fn-or-sym args))
   (let ((VALS (MULTIPLE-VALUE-LIST 
   (let* ((fn (ensure-func fn-or-sym))
          (native-fn (ccl-function-native-fn fn))
          (bslambda (ccl-function-bslambda fn)))
+    (assert (or native-fn (consp bslambda)))
     (cond (native-fn
            (if (eq bslambda 'lap)
              (apply native-fn args)
              (funcall native-fn env fn args)))
           ((ccl-function-name fn)
-           (setq native-fn (compile-native-function (second bslambda) (bslambda-lambda bslambda)))
+           (setq native-fn (compile-native-function (ccl-function-name fn) (bslambda-lambda bslambda)))
            (setf (ccl-function-native-fn fn) native-fn)
            (funcall native-fn env fn args))
           (t ;; else anonymous fn, probably only called once!
-           (assert (listp bslambda))
            (bseval-apply-lambda env bslambda args)))))))
     (when *trace-funcall* (format t "~&RETURNED from ~s: ~s" fn-or-sym vals))
     (apply #'values vals)))
@@ -642,7 +660,7 @@
   (declare (ignore level))
   body)
 
-(defbseval $bs-current-frame-ptr () *env-var-name*)
+(defbseval $bs-current-frame-ptr () `(bsenv-parent ,*env-var-name*))
 
 
 (defbseval $bs-unbound-marker () `',*unbound-marker*)
@@ -754,9 +772,7 @@
   (cassert (= (length argspecs) (length argvals)))
   (let ((sym (and (consp entry)
                   (eq (car entry) '$bs-symbol-value)
-                  (consp (cadr entry))
-                  (eq (car (cadr entry)) '$bs-quote)
-                  (cadr (cadr entry)))))
+                  (bs-unquote (cadr entry)))))
     (check-type sym ccl-symvector))
   (let* ((res-type ($ff-to-ffi resultspec))
          (form `(cffi:foreign-funcall-pointer (cffi:make-pointer ,entry) ()

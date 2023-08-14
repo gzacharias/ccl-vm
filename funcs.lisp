@@ -25,16 +25,16 @@
 
 (defconstant $lfbits-nonnullenv-bit 0)
 (defconstant $lfbits-keys-bit 1)
-(defconstant $lfbits-numopt (byte 5 2))
+(define-symbol-macro $lfbits-numopt (byte 5 2)) ;; in sbcl these are conses, and it doesn't like conses in constants
 (defconstant $lfbits-restv-bit 7)
-(defconstant $lfbits-numreq (byte 6 8))
+(define-symbol-macro $lfbits-numreq (byte 6 8))
 (defconstant $lfbits-optinit-bit 14)
 (defconstant $lfbits-rest-bit 15)
 (defconstant $lfbits-aok-bit 16)
-(defconstant $lfbits-numinh (byte 6 17))
+(define-symbol-macro $lfbits-numinh (byte 6 17))
 (defconstant $lfbits-info-bit 23)
 (defconstant $lfbits-trampoline-bit 24)
-;;; (defconstant $lfbits-code-coverage-bit 25)
+(defconstant $lfbits-code-coverage-bit 25)
 (defconstant $lfbits-cm-bit 26)         ; combined-method
 (defconstant $lfbits-nextmeth-bit 26)   ; or call-next-method with method-bit
 (defconstant $lfbits-gfn-bit 27)        ; generic-function
@@ -113,11 +113,15 @@
       (setf (svref vec (1- last)) val))))
 
 (defun ccl-closure-function (fn)
-  (loop while (logbitp $lfbits-trampoline-bit (ccl-function-bits fn))
-    do (setq fn (svref (ccl-function-data fn) 0))
-    do (when (eq (uvector-subtag fn) subtag-simple-vector) ;?
-         (setq fn (gvref fn 0)))
-    do (assert (ccl-function-p fn)))
+  (if (ccl-function-p fn)
+    (loop while (logbitp $lfbits-trampoline-bit (ccl-function-bits fn))
+      do (setq fn (svref (ccl-function-data fn) 0))
+      do (when (eq (uvector-subtag fn) subtag-simple-vector) ;?
+           (setq fn (gvref fn 0)))
+      do (assert (ccl-function-p fn)))
+    ;; This was happening because 'startup-shutdown-processes got added to *lisp-system-pointer-functions*
+    ;; as a symbol, and the def-ccl-pointer uses #'function-name as key, which ends up here.
+    (error "Attempt to lookup CLOSURE-FUNCTION of  ~s" fn))
   fn)
 
 (defun ccl-function-type-name (fn)
@@ -128,9 +132,7 @@
              (inner-bits (ccl-function-bits inner-fn)))
         (assert (not (eq inner-fn fn)))
         (if (logbitp $lfbits-method-bit inner-bits) ;;???
-          (progn
-            (error "What is this?")
-            'compiled-lexical-closure)
+          (error "What is this?") ; 'compiled-lexical-closure
           (if (logbitp $lfbits-gfn-bit inner-bits)
             'standard-generic-function
             (if (logbitp $lfbits-cm-bit inner-bits)
@@ -144,20 +146,22 @@
   (setf (ccl-function-bslambda fn) bslambda)
   (setf (ccl-function-native-fn fn) nil)
   (setf (ccl-function-data fn)
-        (let* ((name (cadr bslambda))
-               (argspecs (third bslambda))
-               (bits (car (last argspecs)))
-               (data (list name (logandc2 bits (ash 1 $lfbits-noname-bit)))))
-          ;; Support for lfun-keyvect
-          (when (and (logbitp $lfbits-keys-bit bits)
-                     (or (logbitp $lfbits-method-bit bits)
-                         (and (not (logbitp $lfbits-gfn-bit bits))
-                              (not (logbitp $lfbits-cm-bit bits)))))
-            (let* ((keyspecs (cdr (fifth argspecs)))
-                   (keys (map 'vector #'car keyspecs)))
-              (push (make-uvector subtag-simple-vector keys) data)))
-          (apply 'vector data)))
+        (destructuring-bind (name (inh req opt rest keys bits) body num) (cdr bslambda)
+          (declare (ignore inh req opt rest body num))
+          (let ((data (list (bs-unquote name) (logandc2 bits (ash 1 $lfbits-noname-bit)))))
+            ;; Support for lfun-keyvect
+            (when (and (logbitp $lfbits-keys-bit bits)
+                       (or (logbitp $lfbits-method-bit bits)
+                           (and (not (logbitp $lfbits-gfn-bit bits))
+                                (not (logbitp $lfbits-cm-bit bits)))))
+              (push (make-uvector subtag-simple-vector
+                                  (map 'vector #'(lambda (info) (bs-unquote (car info))) (cdr keys)))
+                    data))
+            (apply 'vector data))))
   fn)
+
+(defun make-ccl-function (bslambda)
+  (init-ccl-function (cons-ccl-function) bslambda))
 
 (defun make-ccl-closure (inner-fn vcells)
   (let ((vec (make-array (+ 1 (length vcells) 1))))

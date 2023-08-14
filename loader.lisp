@@ -4,11 +4,13 @@
 ;; different fasload backends already!
 
 ;;;;; For testing only
-(import 'ccl::test-load :ccl-vm)
-(import 'ccl::test-vm :ccl-vm)
-(defun ccl::test-load ()
-  (cl-user::load-cvm) ;; load virtual machine - basic packages, functions.
-  (load-cvmsrcs "CCL:")) ;; now load ccl into it.
+(defun test-load ()
+  (cl-user::load-cvm) ;; load virtual machine sources.
+  ;; TODO: make a link from cvm:ccl; to actual ccl sources so don't have to build in these assumptions
+  (load-cvmsrcs (truename (merge-pathnames "../../ccl/" (truename "cvm:")))))
+(import 'test-load :cl-user)
+#+ccl (import 'test-load :ccl)
+
 
 (defvar *CCL-DIRECTORY*)
 
@@ -23,8 +25,12 @@
     ;; Ok, so this sets toplevel function at the end then throws to toplevel...
     ;; The toplevel func basically calls #'toplevel-loop
     (catch (ccl-symbol :toplevel)
-      (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*)))))
-  (format t "~&CCL-VM LOADED, Should run ~s" *ccl-toplevel-func*))
+      (let ((*load-verbose* t))
+        (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*))))))
+  
+  (setf (sym-value (ccl'*listener-prompt-format*)) (ccl "~[cvm?~:;~:*~d >~] "))
+  #+ccl (loop while (read-char-no-hang ccl::*stdin*)) ;; needed when using AltConsole for some reason
+  (format t "~&CCL-VM LOADED, Should ~s" '(ccl-funcall *ccl-toplevel-func*)))
 
 ;; Build things up to the point where in the bootstrapping version, the heap image
 ;; has been loaded and all the initializations in %toplevel-function% in nfasload
@@ -54,11 +60,6 @@
     ;;(setf (xload-symbol-value (xload-copy-symbol '*xload-cold-load-documentation*))
     ;;      (xload-save-list (setq *xload-cold-load-documentation*
     ;;                             (nreverse *xload-cold-load-documentation*))))
-
-    ;; default to unshared hash tables, lock-free-puthash seems to get an infinite loop *** TODO **** TRACK THIS DOWN
-    ;;  Have to do this before %documentation is initialized, in level-0!
-    (setf (sym-value (ccl '*shared-hash-table-default*)) nil)
-    (setf (sym-value (ccl '*current-process*)) 1234) ;; needed for non-shared hash tables.
     
     ;; The "cold load" stream.
     (loop for (file fn) in calls as index upfrom 1
@@ -187,6 +188,8 @@
 (defun $fs-slot-unbound-marker () *slot-unbound-marker*)
 (defun $fs-illegal-marker () *illegal-marker*)
 
+(defun $fs-char (code) (code-char code)) ;; for non-standard chars
+
 (defun $fs-package (name)
   (fasl-trace "   ~s ~s" '$fs-package name)
   (check-type name ccl-simple-string)
@@ -206,26 +209,6 @@
   (fasl-trace "   ~s ~s ~s" '$fs-make-uvector type-key size)
   (check-type size fixnum)
   (alloc-uvector size (typekey-subtag type-key)))
-
-(defun $fs-init-bslambda (bslambda)
-  ;; We $BS-QUOTED the name and the keywords so as do get the fasdumper to do the right thing,
-  ;; but don't want to have to always eval them.
-  (flet ((unquot (thing)
-           (if (and (consp thing) (consp (cdr thing)) (null (cddr thing))
-                    (eq (car thing) '$bs-quote)
-                    ;(typep (cadr thing) 'ccl-symbol)
-                    )
-             (cadr thing)
-             (error "Expected a quoted object not ~s" thing))))
-    (destructuring-bind (name (inh req opt rest keys bits) body num) (cdr bslambda)
-      (declare (ignore inh req opt rest bits body num))
-      (setf (cadr bslambda) (unquot name))
-      (loop for info in (cdr keys)
-        do (destructuring-bind (key var init supp) info
-             (declare (ignore var init supp))
-             (setf (car info) (unquot key)))))
-    bslambda))
-                   
 
 (defun $fs-cons-function ()
   (fasl-trace "   ~s" '$fs-cons-function)

@@ -1,5 +1,12 @@
 (in-package :ccl-vm)
 
+(defmacro defun-inline (name args &body body)
+  `(progn
+     (declaim (inline ,name))
+     (defun ,name ,args ,@body)))
+
+(defun-inline fixnump (x) (typep x 'fixnum))
+
 ;;; This must match cvm-arch.  Figure out some way to share
 
 ;; A lot of the front end of the compiler, and some random ccl code, assumes a certain basic
@@ -100,7 +107,8 @@
   subtag-slot-vector
   subtag-basic-stream
   subtag-function    ;; ccl-function
-  (subtag-array-header 10))
+  subtag-call-frame ;; Just for us!
+  (subtag-array-header 11))
 
 (define-subtags gvector-subtags-1
   subtag-ratio
@@ -112,7 +120,7 @@
   subtag-lock
   subtag-instance    ;; ccl-instance
   subtag-lexpr-vector   ;; Just for us!
-  (subtag-vector-header 10)
+  (subtag-vector-header 11)
   subtag-simple-vector)
 
 (defconstant min-cl-ivector-subtag #x90) ;; CL ivector subtags start at 9
@@ -209,12 +217,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; random utils
 
-
-(declaim (inline fixnump))
-(defun fixnump (x) (typep x 'fixnum))
-
-(declaim (inline require-type))
-(defun require-type (obj type)
+(defun-inline require-type (obj type)
   (if (typep obj type) obj (require-type-out-of-line obj type)))
 
 (defun require-type-out-of-line (obj type)

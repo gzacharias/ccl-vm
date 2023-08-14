@@ -16,6 +16,17 @@
   (subtag 0 :type (unsigned-byte 8) :read-only t)
   (data #() :type (or simple-vector cffi:foreign-pointer)))
 
+(deftype ccl-object () `(or ccl-fixnum boolean list character single-float
+                            ccl-uvector
+                            (eql ,*unbound-marker*)
+                            (eql ,*slot-unbound-marker*)
+                            (eql ,*illegal-marker*)
+                            (eql ,*unbound-function*)
+                            (eql ,*macro-apply-code*)))
+
+(defun-inline ccl-object-p (obj) (typep obj 'ccl-object))
+
+
 ;; Perhaps should give this a field in the header...
 (defun heap-vector-p (uvec)
   (and (ccl-uvector-p uvec)
@@ -36,7 +47,7 @@
 (defconstant arrayh.flags 4)
 (defconstant arrayh.first-dimension 5)
 
-(defconstant array.flags-subtag-byte (byte 8 8))
+;(defconstant array.flags-subtag-byte (byte 8 8))
 
 (defconstant vectorh.logsize 0) ;; fill pointer or physsize
 (defconstant vectorh.physsize arrayh.physsize)
@@ -134,6 +145,7 @@
 (defun gvset (gvec index val) (setf (svref (gvector-data gvec) index) val))
 (defun (setf gvref) (val gvec index) (gvset gvec index val))
 (defun gvsize (gvec) (length (gvector-data gvec)))
+;; Get rid of the typecheck, I think this really slows things downl..
 (defun gvector-data (gvec) (require-type (uvector-data gvec) 'simple-vector))
 
 (defun uvref (uvec index)
@@ -147,9 +159,6 @@
   (check-type val ccl-object)
   (with-uvector-data (data uvec)
     (heap-vector-uvset uvec index val)
-    ;;; *** TEMP
-    (when (ccl-bignum-p uvec)
-      (check-type val (unsigned-byte 32)))
     (setf (svref data index) val)))
 
 (defun (setf uvref) (val uvec index) (uvset uvec index val))
@@ -344,7 +353,10 @@
     (cond ((eq class-name (ccl 'standard-method))
            (format nil "~a ~a"
                    (sym-print-text class-name)
-                   (func-print-text (instance-slot obj %method.function))))
+                   (let ((fn (instance-slot obj %method.function)))
+                     (if fn
+                       (func-print-text fn)
+                       "<no function>"))))
           (t (format nil "~a ~s slots"
                      (if class-name (sym-print-text class-name) "Unnamed Instance")
                      (uvsize (gvref obj instance.slots)))))))
@@ -355,6 +367,9 @@
 
 (def-uvector-subtype :istruct (ccl-istruct (:constructor %make-ccl-istruct) (:subtag-conser t)))
 
+(defvar *early-hash-tables* nil)
+
+(defconstant nhash.owner 6)
 (defun make-istruct (type &rest vals)
   (%make-ccl-istruct :subtag subtag-istruct
                      :data (apply #'vector (register-istruct-cell type) vals)))
@@ -434,17 +449,6 @@
               fulltag-immediate)
              (t (error "not a CCL-VM object: ~s" obj))))))
 
-(deftype ccl-object () `(or ccl-fixnum boolean list character single-float
-                            ccl-uvector
-                            (eql ,*unbound-marker*)
-                            (eql ,*slot-unbound-marker*)
-                            (eql ,*illegal-marker*)
-                            (eql ,*unbound-function*)
-                            (eql ,*macro-apply-code*)))
-
-(declaim (inline ccl-object-p))
-(defun ccl-object-p (obj) (typep obj 'ccl-object))
-
 (defun lisptag (obj) ;; returns 3 bit typecode
   (logand 7 (fulltag obj)))
 
@@ -477,7 +481,7 @@
 (defun ccl (obj)
   (typecase obj
     (ccl-uvector obj)
-    (simple-base-string (ccl-string obj))
+    (simple-string (ccl-string obj))
     ((or boolean ccl-fixnum single-float character) obj)
     (symbol (ccl-symbol obj))
     (integer (ccl-bignum obj))

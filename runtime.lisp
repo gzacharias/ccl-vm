@@ -80,6 +80,11 @@
        ((= i n))
     (when (= #$LC_ID_DYLIB (ccl::pref p :load_command.cmd))
       (return (ccl (ccl::%get-cstring (ccl::%inc-ptr p (ccl::record-length :dylib_command))))))))
+#-CCL
+(deflapfunction soname-from-mach-header (header)
+  (declare (ignore header))
+  nil)
+
 
 (deflapfunction cvm-gvectorp (obj)
   (and (ccl-uvector-p obj)
@@ -151,50 +156,110 @@
                  37)))
   dest)
 
+#+hemlock(hemlock::defindent "defcstruct" 1)
+
+
+(cffi:defcstruct ccl-ffi::<d>l_info
+  (ccl-ffi::dli_fname :pointer)
+  (ccl-ffi::dli_fbase :pointer)
+  (ccl-ffi::dli_sname :pointer)
+  (ccl-ffi::dli_saddr :pointer))
+
+(cffi:defcstruct ccl-ffi::timeval
+  (ccl-ffi::tv_sec :int64)
+  (ccl-ffi::tv_usec :int32))
+
+(cffi:defcstruct ccl-ffi::host_basic_info
+  (ccl-ffi::max_cpus :int32)
+  (ccl-ffi::avail_cpus :int32)
+  (ccl-ffi::memory_size :uint32)
+  (ccl-ffi::cpu_type :int32)
+  (ccl-ffi::cpu_subtype :int32)
+  (ccl-ffi::cpu_threadtype :int32)
+  (ccl-ffi::physical_cpu :int32)
+  (ccl-ffi::physical_cpu_max :int32)
+  (ccl-ffi::logical_cpu :int32)
+  (ccl-ffi::logical_cpu_max :int32)
+  (ccl-ffi::max_mem :uint64))
+
+(cffi:defcstruct ccl-ffi::timespec
+  (ccl-ffi::tv_sec :int64)
+  (ccl-ffi::tv_nsec :int64))
+
+(cffi:defcstruct ccl-ffi::stat
+  (ccl-ffi::st_dev :int32)
+  (ccl-ffi::st_mode :uint16)
+  (ccl-ffi::st_nlink :uint16)
+  (ccl-ffi::st_ino :uint64)
+  (ccl-ffi::st_uid :uint32)
+  (ccl-ffi::st_gid :uint32)
+  (ccl-ffi::st_rdev :int32)
+  (ccl-ffi::st_atimespec (:struct ccl-ffi::timespec))
+  (ccl-ffi::st_mtimespec (:struct ccl-ffi::timespec))
+  (ccl-ffi::st_ctimespec (:struct ccl-ffi::timespec))
+  (ccl-ffi::st_birthtimespec (:struct ccl-ffi::timespec))
+  (ccl-ffi::st_size :int64)
+  (ccl-ffi::st_blocks :int64)
+  (ccl-ffi::st_blksize :int32)
+  (ccl-ffi::st_flags :uint32)
+  (ccl-ffi::st_gen :uint32)
+  (ccl-ffi::st_lspare :int32)
+  (ccl-ffi::st_qspare1 :int64)
+  (ccl-ffi::st_qspare2 :int64))
+
+(cffi:defctype ccl-ffi::mach_msg_type_number_t :uint32)
+
+(defun cffi-symbol (sym)
+  (intern (sym-native-pname sym) :ccl-ffi))
+
+(defun cffi-type-name (sym)
+  ;; CFFI complains if we don't wrap (:struct) around struct types, but offers no
+  ;; way to tell if something is a struct without triggering the complaint.
+  (let ((type-name (cffi-symbol sym)))
+    (handler-case (cffi::parse-type `(:struct ,type-name))
+      (cffi::undefined-foreign-type-error () type-name))))
+
+
 (deflapfunction cvm-foreign-bit-size (rec-spec)
-  (labels ((native (obj)
-             (etypecase obj
-               (null nil)
-               (cons (cons (native (car obj)) (native (cdr obj))))
-               (fixnum obj)
-               (ccl-symvector (sym-keyword obj)))))
-    #+ccl (ccl::%foreign-type-or-record-size (native (car rec-spec))
-                                             :bits
-                                             (native (cdr rec-spec)))
-    #-ccl (error "Don't know how to get record size of ~s" (native rec-spec))))
+  (destructuring-bind (type . accessors) rec-spec
+    (assert (null accessors)) ;; true for now
+    (* 8 (cffi:foreign-type-size (cffi-type-name type)))))
 
 
-;;; ** REcord the records/data structures we need and look the up.
-;; TODO arrange for the symbol manipulation at compile-time...
-
-
-#+ccl
-(defun record-field-spec  (path)
-  (cond ((ccl-symvector-p path) (sym-keyword path))
-        (t
-         (assert (consp (cdr path)))
-         (let* ((strings (loop for sym in path as first = t then nil
-                           do (assert (eq (sym-pkg sym) *keyword-pkg*))
-                           unless first collect "."
-                           collect (sym-native-pname sym)))
-                (name (apply #'concatenate 'string strings)))
-           (intern name :keyword)))))
+;;; *** TODO: I think the change I made to accept  record.field in record-size might be confused as to whether you are looking
+;;;   at an embedded structure or a pointer to a structure?  CHeck it out.
 
 (deflapfunction cvm-access-foreign-field (ccl-ptr path bit-offset)
   (cassert (eql 0 bit-offset))
+  (assert path)
   (let* ((ptr (%macptr-ptr ccl-ptr))
-         (spec (record-field-spec path)))
-    #-ccl (error "Don't know how to access foreign field ~s" spec)
-    #+ccl (ccl (eval `(ccl:pref ',ptr ,spec)))))
-
+         (stype (cffi-symbol (pop path)))
+         (offset 0))
+    (if (null path)
+      (cffi:mem-ref ptr stype)
+      (loop 
+        for type = `(:struct ,stype) then (cffi:foreign-slot-type type slot-name)
+        for slot-name = (cffi-symbol (pop path))
+        while path
+        do (incf offset (cffi:foreign-slot-offset type slot-name))
+        finally (return (ccl (cffi:foreign-slot-value (cffi:inc-pointer ptr offset) type slot-name)))))))
 
 (deflapfunction setf-cvm-access-foreign-field (ccl-ptr path bit-offset value)
   (cassert (eql 0 bit-offset))
   (when (null value) (error "BUG: how is value null?"))
   (let* ((ptr (%macptr-ptr ccl-ptr))
-         (spec (record-field-spec path)))
-    #-ccl (error "Don't know how to set foreign field ~s" spec)
-    #+ccl (eval `(setf (ccl:pref ',ptr ,spec) ',value))))
+         (cvalue (if (ccl-macptr-p value) (%macptr-ptr value) value))
+         (stype (cffi-symbol (if (consp path) (pop path) (prog1 path (setq path nil)))))
+         (offset 0))
+    (if (null path)
+      (setf (cffi:mem-ref ptr stype) cvalue)
+      (loop
+        for type = `(:struct ,stype) then (cffi:foreign-slot-type type slot-name)
+        for slot-name = (cffi-symbol (pop path))
+        while path
+        do (incf offset (cffi:foreign-slot-offset type slot-name))
+        finally (setf (cffi:foreign-slot-value (cffi:inc-pointer ptr offset) type slot-name) cvalue))))
+  value)
 
 
 (defconstant u32-mask #xFFFFFFFF)
@@ -260,17 +325,10 @@
 
 (deflapfunction cvm-os-constant (symvec)
   (check-type symvec ccl-symvector)
-  (let* ((str (sym-native-pname symvec))
-         (sym (intern str :CCL-FFI)))
+  (let* ((sym (cffi-symbol symvec)))
     (unless (boundp sym)
-      #-ccl (error "Don't know how to get OS constant ~s" sym)
-      #+ccl (let ((val (ccl::load-os-constant sym)))
-              (FORMAT T "~&(defconstant ~s [#x~x]" sym val)
-              ;; load-os-constants defines the constant
-              (assert (eq val (symbol-value sym)))))
+      (error "Don't know how to get OS constant ~s" symvec))
     (symbol-value sym)))
-
-
 
 
 ;;;; Very temporary, I hope..  
@@ -327,6 +385,10 @@
   (buffer :pointer)
   (size ccl-ffi::size_t)
   (result :pointer))
+
+(def-external-call "getcwd" :pointer
+  (buf :pointer)
+  (size ccl-ffi::size_t))
 
 (def-external-call "isatty" :int
   (fd :int))
@@ -440,8 +502,7 @@
 (deflapfunction %bignum-hash (bignum)
   (let* ((len (uvsize bignum))
          (hash (+ (ash len 8) subtag-bignum)))
-    (with-uvector-data (vec bignum)
-      (setq hash (error "Should implement ~s" `(heap-vector-bignum-hash ,bignum)))
+    (with-uvector-data (vec bignum) :error
       ;; So at all times, hash is 32 bits because addl clears high word!!!  I think that rolq should be roll !!
       ;; TODO: report this ^^^ (try it out)
       #+OLD (loop for digit across vec
@@ -519,20 +580,21 @@
 (deflapfunction %get-gc-count () 17)
 
 ;;;
-;;; TODO THIS NEEDS TO BE WEAK  Check weak support in sbcl/lispworks
 ;;; This is basically a big hash table of all the CCL objects that are ever stored in an EQ hash table.
-;;; **TODO: add a hash code slot to ccl-uvector and get rid of this...
+;;; **TODO: add a fake address slot to ccl-uvector and get rid of this...
 ;; This gets big, because there is an eq hash table of functions to lfun names.
 ;; (at end of loading ccl: (CCL-STRUCT . 2) (CCL-SIMPLE-VECTOR . 2) (CCL-PACKAGE . 9) (CONS . 92) (CCL-FUNCTION . 7800)
-(defparameter *fake-addresses-table* (make-hash-table :test 'eq))
+(defparameter *fake-addresses-table* (make-hash-table :test 'eq
+                                                      #+ccl :weak #+ccl t
+                                                      #+sbcl :weakness #+sbcl :key
+                                                      #+lispworks :weak-kind #+lispworks :key
+                                                      #+allegro :weak-keys #+allegro t
+                                                      #-(or ccl sbcl lispworks allegro) (error "Need to make weak hash table")))
+
 
 ;; for instance hash, the address is just used as an initial hash, but
-;; must not conflict with max-class-ordinal
-(defconstant max-class-ordinal (ash 1 20))
-
-;;; *** TODO: anything where we check the subtag for a specific thing and we check if it's a uvector first,
-;;;  make it a ccl-uvector substruct and check the type instead.
-
+;; must not conflict with max-class-ordinal, so put things above there
+(defconstant min-object-address (ash 1 20))
 
 (deflapfunction strip-tag-to-fixnum (obj)
   (cond ((typep obj 'fixnum) obj)
@@ -546,12 +608,19 @@
              (logior m
                      (ash uexp 32)
                      (if (eql sign -1) (ash 1 (+ 32 12)) 0)))))
-        ;; *** ACTUALLY I THIINK THIS IS ONLY SUPPOSED TO HAPPEN FOR FOREIGNN CLASSES?
-        ((and (ccl-uvector-p obj) (eq (uvector-subtag obj) subtag-instance))
-         (+ (1+ max-class-ordinal) (random (- most-positive-fixnum (1+ max-class-ordinal)))))
         (t (or (gethash obj *fake-addresses-table*)
                (setf (gethash obj *fake-addresses-table*)
-                     (1+ (hash-table-count *fake-addresses-table*)))))))
+                     (+ min-object-address (ash (1+ (hash-table-count *fake-addresses-table*)) 3)))))))
+
+
+;; This is needed for %print-unreadable-object, unfortunately.
+(deflapfunction %address-of (obj)
+  (lap-strip-tag-to-fixnum obj))
+
+(deflapfunction cvm-ivectorp (obj)
+  (and (ccl-uvector-p obj)
+       (ivector-type-p (uvector-subtag obj))))
+
 
 ;; ccl has fast-mod, why doesn't it have an optimizer to use it??
 ;; sbcl does use this.
@@ -578,6 +647,7 @@
     ;;; TODO: remove
     ;; ash shift LEFT
     ;; Values as they appear in registers
+    #+ccl
     (let ((cres (ccl::fast-mod-3 number divisor recip)))
       (unless (eq res cres)
         (break "fast-mod-3 ~s ~s ~s our ~s ccl ~s"
@@ -715,11 +785,12 @@
          (name-ptr (cffi:make-pointer (%macptr-value name))))
     (when (eq hval 0) (setq hval RTLD_DEFAULT))
     (let ((val (ff-dlsym hval name-ptr)))
-      (when (and (eql val 0) (eql (cffi:mem-ref name-ptr :char 0) #\_))
+      (when (and (eql val 0) (eql (cffi:mem-ref name-ptr :char 0) (char-code #\_)))
         (setq val (ff-dlsym hval (cffi:inc-pointer name-ptr 1))))
       (when (eql val 0)
         (error "Can't find symbol ~s" (cffi:foreign-string-to-lisp name-ptr)))
       val)))
+
 
 (let ((lock (make-rw-lock-obj)))
   (setf (sym-value (ccl '%all-packages-lock%)) lock)
@@ -851,23 +922,25 @@
   nil)
 
 (deflapfunction single-float-bits (float)
-  (multiple-value-bind (mantissa exp sign) (integer-decode-float float)
-    (setq exp (+ exp 150))
-    (if (logbitp 23 mantissa)
-      (if (<= exp 0)
-        (progn
-          (assert (>= exp -22))
-          (assert (zerop (ldb (byte (- 1 exp) 0) mantissa)))
-          (setq mantissa (ash mantissa (1- exp)) exp 0))
-        (setq mantissa (logandc2 mantissa (ash 1 23))))
-      (progn
-        ;; This might be making too many assumptions about integer-decode-float?
-        (assert (and (eq mantissa 0) (eq exp 0)))))
-    (check-type mantissa (unsigned-byte 23))
-    (check-type exp (unsigned-byte 8))
-    (logior (if (eql sign -1) (ash 1 31) 0)
-            (ash exp 23)
-            mantissa)))
+  (multiple-value-bind (sig exp sign) (integer-decode-float float)
+    ;;(assert (< sig (ash 1 24)))
+    (multiple-value-bind (mantissa bexp)
+                         (if (eql sig 0)
+                           (values 0 0)
+                           (let ((bexp (+ exp 150)))
+                             (loop while (< sig (ash 1 23)) do (setq sig (ash sig 1) bexp (1- bexp)))
+                             (assert (< bexp 255))
+                             (if (<= bexp 0)
+                               (let ((shift (- 1 bexp)))
+                                 (assert (<= 1 shift 23))
+                                 (assert (zerop (ldb (byte shift 0) sig)))
+                                 (values (ash sig (- shift)) 0))
+                               (values (logandc2 sig (ash 1 23)) bexp))))
+      (check-type mantissa (unsigned-byte 23))
+      (check-type bexp (unsigned-byte 8))
+      (let ((val (logior (if (eql sign -1) (ash 1 31) 0) (ash bexp 23) mantissa)))
+        #+ccl (assert (eq val (ccl::single-float-bits float)))
+        val))))
 
 (deflapfunction %short-float-sign (float) (< float 0))
 
@@ -1070,7 +1143,8 @@
     (apply-in-environment env dcode args)))
 
 (def-gf-proto unset-fin-trampoline (env self args)
-  (signal-error $xnofinfunction self args env))
+  ;(signal-error $xnofinfunction self args env)
+  (error "Unset FIN function ~s ~s ~s" self args env))
 
 (deflapfunction replace-function-code (target proto)
   (assert (eq (ccl-function-bslambda proto) 'gf-proto))
@@ -1178,8 +1252,7 @@
     (assert (logbitp $lfbits-method-bit bits))
     (when (logbitp $lfbits-nextmeth-bit bits)
       (push magic args)))
-  ;; -KNOWN-METHOD thing is just for typechecking
-  (apply-in-environment-KNOWN-METHOD env func args))
+  (apply-in-environment env func args))
 
 ;; Seriously?? It can't just use a closure?  Maybe the FN thing is used somewhere?
 (deflapfunction cvm-make-type-fn (datum fn name bits)
@@ -1198,10 +1271,29 @@
   (check-type fn ccl-function)
   (gvset fn index value))
 
+(deflapfunction make-bslambda-lfun (bslambda)
+  (make-ccl-function bslambda))
+
+;; for fasdumping
+(deflapfunction lfun-bslambda (fn)
+  (ccl-function-bslambda fn))
+
+(deflapfunction cvm-xdisassemble (fn)
+  (let ((bslambda (ccl-function-bslambda fn)))
+    (if (consp bslambda)
+      (let ((*print-pretty* t)
+            #+ccl (ccl::*print-right-margin* 200))
+        (print (bslambda-lambda bslambda))
+        nil)
+      (disassemble (ccl-function-native-fn fn)))))
+
+
+(deflapfunction values (&rest the-values)
+  (apply #'values the-values))
 
 ;;;; Heap vectors
-;; aka Make a heap vector
-(deflapfunction fudge-heap-pointer (ptr subtag num-elts)
+
+(deflapfunction fudge-heap-pointer (ptr subtag num-elts) ;; aka Make a heap vector
   (check-type subtag (unsigned-byte 8))
   (check-type num-elts (unsigned-byte 56))
   (unless (svref *subtag-ffi-types* subtag)
@@ -1261,7 +1353,8 @@
                    ((:int64 :uint64) (ash (+ nbytes 7) -3))
                    (t (error "Cant copy ~s vectors" (subtag-typekey (uvector-subtag src)))))))
       (loop for si upfrom src-byte-offset for di upfrom dest-byte-offset for n from 0 below count
-        do (setf (uvref dest di) (uvref src si))))))
+        do (setf (uvref dest di) (uvref src si))))
+    dest))
 
 
 
@@ -1280,6 +1373,54 @@
   (setq *ccl-toplevel-func* func))
 
 (deflapfunction %no-thread-local-binding-marker () 'no-thread-local-binding-marker)
+
+
+(deflapfunction %frame-backlink (p context)
+  (declare (ignore context))
+  (when p
+    (bsenv-parent p)))
+
+(deflapfunction cfp-lfun (p)
+  ;; Second value is PC.  0 makes it call arg-check-call-arguments to get the arg info.
+  ;; nil makes it print "???".
+  (let ((func (bsenv-func p)))
+    (values func
+            (if (consp (ccl-function-bslambda func)) 0 nil))))
+
+(deflapfunction arg-check-call-arguments (p func)
+  (assert (eq func (bsenv-func p)))
+  ;; Currently args are recorded on entry to function, so only get recorded as part of
+  ;; the bslambda-lambda.  if we make apply-in-environment do it, then could rely
+  ;; on it even for lap.  Except in that case, there is no frame for the lap code, just the
+  ;; parent function, sigh.  Maybe should make a little env for lap stuff as well.
+  (when (consp (ccl-function-bslambda func))
+    (bsenv-args p)))
+
+;; send value is bottom-of-stack-p
+(deflapfunction lisp-frame-p (p context)
+  (declare (ignore p context))
+  t)
+
+(deflapfunction catch-csp-p (p context)
+  (declare (ignore p context))
+  nil)
+
+(deflapfunction %catch-top (tcr)
+  (declare (ignore tcr))
+  nil)
+
+(deflapfunction %stack< (p1 p2 &optional context)
+  (declare (ignore p1 p2 context))
+  nil)
+
+(deflapfunction exception-frame-p (p)
+  (declare (ignore p))
+  nil)
+
+(deflapfunction index->address (p)
+  (declare (ignore p))
+  #x1234)
+
 
 ;;;; standard io streams
 
@@ -1319,9 +1460,11 @@
 (deflapfunction native-stream-write-char (which c)
   (write-char c (aref *native-streams* which)))
 
+;; SHould defmethod for sbc. It's insane!!!
 (deflapfunction native-stream-line-column (which)
   ;; Assume everybody makes gray streams available to cl-user...
-  (cl-user::stream-line-column (aref *native-streams* which)))
+  #-sbcl (cl-user::stream-line-column (aref *native-streams* which))
+  #+sbcl (sb-kernel:charpos (aref *native-streams* which)))
   
 (deflapfunction native-stream-set-column (which column)
   (if (eql column 0)
