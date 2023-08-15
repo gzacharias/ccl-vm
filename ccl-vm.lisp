@@ -27,7 +27,7 @@
     "cvm:syms.lisp"
     "cvm:funcs.lisp"
     "cvm:loader.lisp"
-    "cvm:vm-bseval.lisp"
+    "cvm:bceval.lisp"
     "cvm:runtime.lisp"
     ))
 
@@ -35,6 +35,7 @@
   (ensure-directories-exist "cvm:fasls;")
   (with-compilation-unit ()
     (loop for file in *ccl-vm-files*
+      ;; Compile them so with-compilation-unit can do its thing...
       as fasl = (compile-file file
                               :output-file (make-pathname :name (pathname-name file) :defaults "cvm:fasls;")
                               :verbose verbose)
@@ -89,9 +90,9 @@
 (defun ppfun (func-or-sym)
   (let* ((func (ccl-vm::ensure-func (ccl-vm::ccl func-or-sym)))
          (ccl::*print-right-margin* 150)
-         (bslambda (ccl-vm::ccl-function-bslambda func)))
-    (format t "~&~s ~s ~s" (first bslambda) (second bslambda) (third bslambda))
-    (pprint (fourth bslambda))))
+         (bclambda (ccl-vm::ccl-function-bclambda func)))
+    (format t "~&~s ~s ~s" (first bclambda) (second bclambda) (third bclambda))
+    (pprint (fourth bclambda))))
 
 #+ccl
 (import '(ccl::show-lfun-bits ccl::h ccl::dfunc) :ccl-vm)

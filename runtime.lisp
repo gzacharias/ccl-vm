@@ -32,7 +32,7 @@
        (let ((_name (ccl-symbol ',name))
              (_fn (cons-ccl-function)))
          (setf (ccl-function-data _fn) (vector _name 0)) ;; could add arg info...
-         (setf (ccl-function-bslambda _fn) ',(if env-p 'lap-with-env 'lap))
+         (setf (ccl-function-bclambda _fn) ',(if env-p 'lap-with-env 'lap))
          (setf (ccl-function-native-fn _fn) #',lap-fn)
          (setf (sym-func _name) _fn)))))
 
@@ -1113,7 +1113,7 @@
   `(let* ((sym (ccl-symbol ',name))
           (fn (%make-ccl-function :subtag subtag-function
                                   :data (vector sym 0)
-                                  :bslambda 'gf-proto
+                                  :bclambda 'gf-proto
                                   :native-fn ,(if (listp args-or-lap-name)
                                                 `(named-function ,name ,args-or-lap-name ,@body)
                                                 `(function ,args-or-lap-name)))))
@@ -1147,18 +1147,18 @@
   (error "Unset FIN function ~s ~s ~s" self args env))
 
 (deflapfunction replace-function-code (target proto)
-  (assert (eq (ccl-function-bslambda proto) 'gf-proto))
+  (assert (eq (ccl-function-bclambda proto) 'gf-proto))
   (setf (ccl-function-native-fn target) (ccl-function-native-fn proto)))
 
 (defun make-cloned-fn (type data native-fn)
   (check-type type symbol)
   (%make-ccl-function :subtag subtag-function
-                      :bslambda type
+                      :bclambda type
                       :data data
                       :native-fn native-fn))
 
 (deflapfunction cvm-make-gf (proto &rest data)
-  (assert (eq (ccl-function-bslambda proto) 'gf-proto))
+  (assert (eq (ccl-function-bclambda proto) 'gf-proto))
   ;;; *** REMOVE THIS ONCE DEBUGGED -- add a name so we  know where it comes from
   ;; (assert (not (logbitp $lfbits-noname-bit (car (last data))))) ;; not always true, sigh
   (unless (logbitp $lfbits-noname-bit (car (last data)))
@@ -1271,20 +1271,20 @@
   (check-type fn ccl-function)
   (gvset fn index value))
 
-(deflapfunction make-bslambda-lfun (bslambda)
-  (make-ccl-function bslambda))
+(deflapfunction make-bclambda-lfun (bclambda)
+  (make-ccl-function bclambda))
 
 ;; for fasdumping
-(deflapfunction lfun-bslambda (fn)
-  (ccl-function-bslambda fn))
+(deflapfunction lfun-bclambda (fn)
+  (ccl-function-bclambda fn))
 
 (deflapfunction cvm-xdisassemble (fn)
-  (let ((bslambda (ccl-function-bslambda fn)))
-    (if (consp bslambda)
+  (let ((bclambda (ccl-function-bclambda fn)))
+    (if (consp bclambda)
       (let ((*print-pretty* t)
             #+ccl (ccl::*print-right-margin* 200)
             (*package* *native-package*))
-        (print (bslambda-lambda bslambda))
+        (print (bclambda-lambda bclambda))
         nil)
       (disassemble (ccl-function-native-fn fn)))))
 
@@ -1366,11 +1366,11 @@
 (defvar *ccl-toplevel-func* nil)
 
 (deflapfunction %tcr-toplevel-function (tcr)
-  (assert (eql tcr 23)) ;; see $bs-current-tcr
+  (assert (eql tcr 23)) ;; see $bc-current-tcr
   *ccl-toplevel-func*)
 
 (deflapfunction %set-tcr-toplevel-function (tcr func)
-  (assert (eql tcr 23)) ;; see $bs-current-tcr
+  (assert (eql tcr 23)) ;; see $bc-current-tcr
   (setq *ccl-toplevel-func* func))
 
 (deflapfunction %no-thread-local-binding-marker () 'no-thread-local-binding-marker)
@@ -1379,23 +1379,23 @@
 (deflapfunction %frame-backlink (p context)
   (declare (ignore context))
   (when p
-    (bsenv-parent p)))
+    (bcenv-parent p)))
 
 (deflapfunction cfp-lfun (p)
   ;; Second value is PC.  0 makes it call arg-check-call-arguments to get the arg info.
   ;; nil makes it print "???".
-  (let ((func (bsenv-func p)))
+  (let ((func (bcenv-func p)))
     (values func
-            (if (consp (ccl-function-bslambda func)) 0 nil))))
+            (if (consp (ccl-function-bclambda func)) 0 nil))))
 
 (deflapfunction arg-check-call-arguments (p func)
-  (assert (eq func (bsenv-func p)))
+  (assert (eq func (bcenv-func p)))
   ;; Currently args are recorded on entry to function, so only get recorded as part of
-  ;; the bslambda-lambda.  if we make apply-in-environment do it, then could rely
+  ;; the bclambda-lambda.  if we make apply-in-environment do it, then could rely
   ;; on it even for lap.  Except in that case, there is no frame for the lap code, just the
   ;; parent function, sigh.  Maybe should make a little env for lap stuff as well.
-  (when (consp (ccl-function-bslambda func))
-    (bsenv-args p)))
+  (when (consp (ccl-function-bclambda func))
+    (bcenv-args p)))
 
 ;; send value is bottom-of-stack-p
 (deflapfunction lisp-frame-p (p context)

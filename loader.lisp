@@ -5,20 +5,17 @@
 
 ;;;;; For testing only
 (defun test-load ()
-  (cl-user::load-cvm) ;; load virtual machine sources.
+  (cl-user::load-cvm) ;; reload virtual machine sources, in case changed also redoes the init.
   ;; TODO: make a link from cvm:ccl; to actual ccl sources so don't have to build in these assumptions
   (load-cvmsrcs (truename (merge-pathnames "../../ccl/" (truename "cvm:")))))
 (import 'test-load :cl-user)
 #+ccl (import 'test-load :ccl)
 
-
 (defvar *CCL-DIRECTORY*)
 
 (defparameter *loading-ccl* nil)
 
-;;; *** TODO: make disassemble do a pprint of the bslambda! or the bslambda-lambda
-
-;;; 5 mins
+;;; ~5 mins
 (defun load-cvmsrcs (&optional (ccl-directory "CCL:"))
   (let ((*loading-ccl* t))
     (cvm-load-level-0 ccl-directory)
@@ -29,7 +26,7 @@
         (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*))))))
   
   (setf (sym-value (ccl'*listener-prompt-format*)) (ccl "~[cvm?~:;~:*~d >~] "))
-  #+ccl (loop while (read-char-no-hang ccl::*stdin*)) ;; needed when using AltConsole for some reason
+  #+ccl (loop while (read-char-no-hang ccl::*stdin*)) ;; needed when restarting after errors, when using AltConsole for some reason
   (format t "~&CCL-VM LOADED, Should ~s" '(ccl-funcall *ccl-toplevel-func*)))
 
 ;; Build things up to the point where in the bootstrapping version, the heap image
@@ -110,7 +107,7 @@
 
 
 ;; a CVMSRC file is a bunch of toplevel calls to these $fasl functions.  The arguments
-;; (once evaluated in the host lisp) are BSEVAL expressions, can then be BSEVAL'ed to yield
+;; (once evaluated in the host lisp) are BC expressions, can then be bceval'ed to yield
 ;; various native objects, or effect sideffects in the VM...
 
 (defvar *fasl-trace* nil)
@@ -214,10 +211,10 @@
   (fasl-trace "   ~s" '$fs-cons-function)
   (cons-ccl-function))
 
-(defun $fs-init-function (fn bslambda)
+(defun $fs-init-function (fn bclambda)
   (let ((*print-length* 3) (*print-level* 3))
-  (fasl-trace "   ~s ~s ~s" '$fs-init-function fn bslambda))
-  (init-ccl-function fn bslambda))
+  (fasl-trace "   ~s ~s ~s" '$fs-init-function fn bclambda))
+  (init-ccl-function fn bclambda))
 
 (defun $fs-init-uvector (uvec &rest values)
   (fasl-trace "   ~s ~s ~s" '$fs-init-uvector uvec values)
@@ -253,12 +250,12 @@
     (simple-eval expr)))
 
 ;; like $fasl-funcall but for value, it's used in load-time values.
-;;; I BELIEVE *ALL* calls to this a find-class-cell, maybe its worth breaking out,
+;;; I BELIEVE *ALL* calls to this are find-class-cell, maybe its worth breaking out,
 ;;; even just to call out to ccl.
 ;;; OR conversely, do we really need $fs-istruct-cell?  can we call something in ccl?
 (defun $fs-funcall (fn)
   (fasl-trace "   ~s ~s" '$fs-funcall fn)
-  ;(FORMAT *trace-OUTPUT* "~&$FS-FUNCALL ~s" (ccl-function-bslambda fn))
+  ;(FORMAT *trace-OUTPUT* "~&$FS-FUNCALL ~s" (ccl-function-bclambda fn))
   (when *deferred-level-0-calls*
     (error "$fs-funcall in level-0 ~s" fn))
   (ccl-funcall fn))

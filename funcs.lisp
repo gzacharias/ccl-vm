@@ -51,10 +51,10 @@
                ;; method object hasn't been installed yet.
                name)))
           ((logbitp $lfbits-cm-bit bits) ;; same as nextmeth bit in methods
-           (assert (eq (ccl-function-bslambda fn) 'combined-method))
+           (assert (eq (ccl-function-bclambda fn) 'combined-method))
            (func-name (ccl-function-name fn)))
           ((logbitp $lfbits-gfn-bit bits)
-           (assert (eq (ccl-function-bslambda fn) 'gf))
+           (assert (eq (ccl-function-bclambda fn) 'gf))
            (gvref (gvref fn gf.slots) sgf.name))
           (t (ccl-function-name (ccl-closure-function fn))))))
 
@@ -63,9 +63,9 @@
          (name (func-name fn)))
     (format nil "~a ~a~a ~a"
             (if (ccl-function-native-fn fn)
-              (if (consp (ccl-function-bslambda fn))
+              (if (consp (ccl-function-bclambda fn))
                 "Compiled"
-                (ccl-function-bslambda fn)) ;; this is lisp sym
+                (ccl-function-bclambda fn)) ;; this is lisp sym
               "Interp")
             (if (logbitp $lfbits-method-bit bits)
                (if (ccl-instance-p (ccl-function-name (ccl-closure-function fn)))
@@ -142,26 +142,26 @@
         'method-function
         'compiled-function))))
 
-(defun init-ccl-function (fn bslambda)
-  (setf (ccl-function-bslambda fn) bslambda)
+(defun init-ccl-function (fn bclambda)
+  (setf (ccl-function-bclambda fn) bclambda)
   (setf (ccl-function-native-fn fn) nil)
   (setf (ccl-function-data fn)
-        (destructuring-bind (name (inh req opt rest keys bits) body num) (cdr bslambda)
+        (destructuring-bind (name (inh req opt rest keys bits) body num) (cdr bclambda)
           (declare (ignore inh req opt rest body num))
-          (let ((data (list (bs-unquote name) (logandc2 bits (ash 1 $lfbits-noname-bit)))))
+          (let ((data (list (bc-unquote name) (logandc2 bits (ash 1 $lfbits-noname-bit)))))
             ;; Support for lfun-keyvect
             (when (and (logbitp $lfbits-keys-bit bits)
                        (or (logbitp $lfbits-method-bit bits)
                            (and (not (logbitp $lfbits-gfn-bit bits))
                                 (not (logbitp $lfbits-cm-bit bits)))))
               (push (make-uvector subtag-simple-vector
-                                  (map 'vector #'(lambda (info) (bs-unquote (car info))) (cdr keys)))
+                                  (map 'vector #'(lambda (info) (bc-unquote (car info))) (cdr keys)))
                     data))
             (apply 'vector data))))
   fn)
 
-(defun make-ccl-function (bslambda)
-  (init-ccl-function (cons-ccl-function) bslambda))
+(defun make-ccl-function (bclambda)
+  (init-ccl-function (cons-ccl-function) bclambda))
 
 (defun make-ccl-closure (inner-fn vcells)
   (let ((vec (make-array (+ 1 (length vcells) 1))))
@@ -172,7 +172,7 @@
                     (logior (ash 1 $lfbits-noname-bit)
                             (ash 1 $lfbits-trampoline-bit))))
     (%make-ccl-function :subtag subtag-function
-                        :bslambda 'closure
+                        :bclambda 'closure
                         :data vec
                         :native-fn #'call-closure)))
 

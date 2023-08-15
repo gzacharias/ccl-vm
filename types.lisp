@@ -179,7 +179,7 @@
 (deftype ccl-symbol () '(or boolean ccl-symvector))
 
 (def-uvector-subtype :function (ccl-function (:constructor %make-ccl-function) (:subtag-conser nil))
-  (bslambda () :type (or list symbol))
+  (bclambda () :type (or list symbol))
   ;; The native function takes 3 arguments:
   ;; (1) outer env (which is not really used but is there to provide a stack for debugging)
   ;; (2) ccl-function object, for self call and debugging
