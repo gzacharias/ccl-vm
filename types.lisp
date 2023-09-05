@@ -179,6 +179,7 @@
 (deftype ccl-symbol () '(or boolean ccl-symvector))
 
 (def-uvector-subtype :function (ccl-function (:constructor %make-ccl-function) (:subtag-conser nil))
+  ;; If bclambda is a symbol, it's the type of native-fn it is.
   (bclambda () :type (or list symbol))
   ;; The native function takes 3 arguments:
   ;; (1) outer env (which is not really used but is there to provide a stack for debugging)
@@ -243,12 +244,13 @@
 
 (def-uvector-subtype :macptr (ccl-macptr (:constructor %make-ccl-macptr) (:subtag-conser t)))
 
-(defconstant macptr.address-cell 0) ;; this contains raw native (unsigned-byte 64).
-;(defconstant macptr.domain-cell 1)
-;(defconstant macptr.type-cell 2)
+(defconstant macptr.address 0) ;; this contains raw native (unsigned-byte 64).
+(defconstant macptr.domain 1)
+(defconstant macptr.type 2)
 
-;(defconstant xmacptr.element-count 5)
-;(defconstant xmacptr.flags-cell 3)
+;(defconstant xmacptr.flags 3)
+;(defconstant xmacptr.element 5)
+
 
 
 (defun make-ccl-macptr (native-value &optional gc-flags)
@@ -266,15 +268,16 @@
 
 (defun %macptr-value (ptr) ;; returns raw native (unsigned-byte 64)
   (check-type ptr ccl-macptr)
-  (svref (gvector-data ptr) macptr.address-cell))
+  (svref (gvector-data ptr) macptr.address))
   
 (defun %macptr-ptr (macptr)  ;; value as a native pointer
   (cffi:make-pointer (%macptr-value macptr)))
 
+
 (defun (setf %macptr-value) (value ptr)
   (check-type ptr ccl-macptr)
   (check-type value (or integer cffi:foreign-pointer))
-  (setf (svref (gvector-data ptr) macptr.address-cell)
+  (setf (svref (gvector-data ptr) macptr.address)
         (if (integerp value)
           (logand #xFFFFFFFFFFFFFFFF value)
           (cffi:pointer-address value))))
@@ -386,7 +389,7 @@
     (if (or (eq type (ccl'pathname)) (eq type (ccl'logical-pathname)))
       (format stream "{#P~s}"
               (native-string (ccl-funcall (ccl'namestring) obj)))
-      (format stream "<ISTRUCT ~a ~d slots>"
+      (format stream "{ISTRUCT ~a ~d slots}"
               (sym-print-text type)
               (1- (length (gvector-data obj)))))))
 
@@ -397,7 +400,7 @@
 
 (defmethod print-object ((obj ccl-struct) stream)
   (let ((type (uvref (car (uvref obj 0)) class-cell.name)))
-    (format stream "<STRUCT ~a ~d slots>"
+    (format stream "{STRUCT ~a ~d slots}"
             (sym-print-text type)
             (1- (length  (gvector-data obj))))))
 
@@ -441,11 +444,13 @@
     (ccl-symvector fulltag-symbol)
     (ccl-function fulltag-function)
     (ccl-uvector fulltag-misc)
-    (t (cond ((or (eq obj *unbound-marker*)
-                  (eq obj *slot-unbound-marker*)
-                  (eq obj *illegal-marker*)
-                  (eq obj *unbound-function*)
-                  (eq obj *macro-apply-code*))
+    (t (cond ((symbolp obj)
+              (unless (or (eq obj *unbound-marker*)
+                          (eq obj *slot-unbound-marker*)
+                          (eq obj *illegal-marker*)
+                          (eq obj *unbound-function*)
+                          (eq obj *macro-apply-code*))
+                (cerror "Ignore" "Unknown immediate ~s" obj))
               fulltag-immediate)
              (t (error "not a CCL-VM object: ~s" obj))))))
 
@@ -514,7 +519,7 @@
 
 (defparameter *uvector-subtag-type-names*
   (let ((vec (make-array 256 :initial-contents *uvector-subtag-typekeys*)))
-    ;; a few renamings
+    (setf (svref vec subtag-symvector) 'symbol)
     (setf (svref vec subtag-struct) 'structure)
     (setf (svref vec subtag-istruct) 'internal-structure)
     (setf (svref vec subtag-simple-string) 'simple-base-string)
@@ -526,6 +531,8 @@
     (setf (svref vec subtag-unsigned-32-bit-vector) 'simple-unsigned-long-vector)
     (setf (svref vec subtag-signed-64-bit-vector) 'simple-signed-doubleword-vector)
     (setf (svref vec subtag-unsigned-64-bit-vector) 'simple-unsigned-doubleword-vector)
+    (loop for i from 0 below 256 as type = (svref vec i)
+      when (keywordp type) do (setf (svref vec i) (intern (symbol-name type))))
     vec))
 
 (defun uvector-type-name (obj)

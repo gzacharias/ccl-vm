@@ -75,9 +75,8 @@
 (defun bclambda-name (bclambda) (bc-unquote (nth 1 bclambda)))
 (defun bclambda-argspecs (bclambda) (nth 2 bclambda))
 
-
-;; Why not do this at compile time?  Because don't want the compiler using native lisp calls so can be loaded by non-lisp vm's?
 (defun bclambda-lambda (bclambda)
+  (assert (eq (car bclambda) 'bclambda))
   (destructuring-bind (name argspecs body num-vars) (cdr bclambda)
     (declare (ignore name))
     (destructuring-bind (inherited req-lvs opt-lvs rest-lv keys-lvs bits) argspecs
@@ -89,12 +88,12 @@
         (flet ((bind-form (lv value-form)
                  (if (fixnump lv)
                    `(bcenv-lbind ,*env-var-name* ,lv ,value-form)
-                   (let ((old-var (gensym (sym-native-pname lv))))
-                     (check-type lv ccl-symbol) ;; not T/NIL, can't bind those.
-                     (push (cons lv old-var) special-bindings)
+                   (let* ((var (bc-unquote lv))
+                          (old-var (make-symbol (sym-native-pname var))))
+                     (push (cons var old-var) special-bindings)
                      `(progn
-                        (setq ,old-var (%sym-value ',lv))
-                        (%set-sym-value ',lv ,value-form))))))
+                        (setq ,old-var (%sym-value ',var))
+                        (%set-sym-value ',var ,value-form))))))
           (when (or inherited req-lvs)
             (push `(assert (>= (length ,values-var) ,(+ (length inherited) (length req-lvs)))) rev-inits))
           (loop for lv in inherited
@@ -143,10 +142,6 @@
              (declare (ignorable ,*env-var-name*))
              ,body))))))
 
-
-(defun bceval-apply-lambda (env bclambda values)
-  (cassert (bceval-op-p bclambda 'bclambda))
-  (eval `(,(bclambda-lambda bclambda) ',env ',bclambda ',values)))
 
 (defvar *known-bceval-ops* nil)
 
@@ -213,7 +208,8 @@
 
 (defun bc-unquote (form)
   (assert (and (consp form)
-               (eq (car form) '$bc-quote)
+               (or (eq (car form) '$bc-quote)
+                   (eq (car form) (ccl '$bc-quote)))
                (null (cddr form))))
   (cadr form))
 
@@ -359,7 +355,7 @@
   `(progn
      ,@(loop for (var-index init) in bindings
          do (check-type var-index fixnum)
-         collect `(bcenv-lbind ,*ENV-VAR-NAME* ,var-index ,init))
+         collect `(bcenv-lbind ,*env-var-name* ,var-index ,init))
      ,body))
 
 (defbceval $bc-multiple-value-bind (var-indices valform body)
@@ -391,17 +387,19 @@
 
 (defvar *trace-funcall* nil)
 
-;;; **TODO: use when-let etc!
-
 (defun compile-native-function (ccl-name lambda)
   (multiple-value-bind (res warnings-p failure-p) (compile 'ccl-fn lambda)
     (when failure-p (error "compilation failed on ~s" ccl-name))
     (when warnings-p      ;; All the warnings complained of errors in CCL-FN, give a hit of real name
       (format t "~&in compilation of ~s. ~%" ccl-name))
     (setf res (fdefinition res))
-    #+ccl (ccl::lfun-name res `(ccl-fn ,(or (ignore-errors (native ccl-name)) ccl-name)))
+    (let* ((native-name (ignore-errors (native ccl-name)))
+           (fn-name (if (consp native-name)
+                      `(ccl-fn ,@native-name)
+                      `(ccl-fn ,(or native-name ccl-name)))))
+      #+ccl (ccl::lfun-name res fn-name)
+      #+sbcl (setf (sb-kernel:%fun-name res) fn-name))
     res))
-#+hemlock (hemlock::defindent "compile-native-function" 1)
 
 (defun funcall-in-environment (env fn-or-sym &rest args)
   (apply-in-environment env fn-or-sym args))
@@ -422,15 +420,11 @@
            (setq native-fn (compile-native-function (ccl-function-name fn) (bclambda-lambda bclambda)))
            (setf (ccl-function-native-fn fn) native-fn)
            (funcall native-fn env fn args))
-          (t ;; else anonymous fn, probably only called once!
-           (bceval-apply-lambda env bclambda args)))))))
-    (when *trace-funcall* (format t "~&RETURNED from ~s: ~s" fn-or-sym vals))
-    (apply #'values vals)))
+          (t ;; else anonymous fn, probably only called once, don't bother compiling.
+           (eval `(,(bclambda-lambda bclambda) ',env ',fn ',args))))))))
+  (when *trace-funcall* (format t "~&RETURNED from ~s: ~s" fn-or-sym vals))
+  (apply #'values vals)))
 
-;; TODO: I think we only ever generate this for self-call.  Can just use $bc-funcall and
-;; bceval-apply-ccl-function can recognize the lambda case.
-#+NOTYET (defbceval $bc-funcall-lambda (bclambda &rest args)
-  `(bceval-apply-lambda ,*env-var-name* ,bclambda (list ,@args)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  numbers, chars
@@ -673,8 +667,8 @@
 (defun setf-macptr (ptr value)
   (check-type ptr ccl-macptr)
   (check-type value ccl-macptr)
-  (setf (svref (gvector-data ptr) macptr.address-cell)
-        (svref (gvector-data value) macptr.address-cell))
+  (setf (svref (gvector-data ptr) macptr.address)
+        (svref (gvector-data value) macptr.address))
   ptr)
 
 
@@ -699,8 +693,9 @@
 
 (defbceval $bc-inc-macptr (ptr offset) `(make-ccl-macptr (+ (%macptr-value ,ptr) ,offset)))
 
-(defbceval $bc-int-to-macptr (int)
-  `(make-ccl-macptr (native-integer ,int)))
+(defbceval $bc-int-to-macptr (int) `(make-ccl-macptr (native-integer ,int)))
+
+(defbceval $bc-macptr-to-int (macptr) `(%macptr-value ,macptr))
 
 #+NOTYET (defbceval $bc-get-macptr (ptr offset) (%get-ptr ptr offset))
 
@@ -708,7 +703,15 @@
   ;; Can just do EQL, once that's debugged
   `(= (%macptr-value ,ptr1) (%macptr-value ,ptr2)))
 
-;;; **TODO: macptr value should be a native pointer! a lot less consing then.
+;;; **TODO: macptr value should be a pointer rather than integer, a lot less consing then.
+
+
+;; must match FF-xxx constants in cvm2.lisp
+(defparameter *ff-types* #(:int64 :int32 :int16 :int8 :uint64 :uint32 :uint16 :uint8 :float :double :pointer :void))
+(defun ff-type (index)
+  (if (< index 256)
+    index
+    (svref *ff-types* (- index 256))))
 
 (defun ffi-to-ccl (type form)
   (case type
@@ -723,10 +726,12 @@
     (t form)))
 
 (defbceval $bc-macptr-get (ptr byte-offset ff-type)
+  (setq ff-type (ff-type ff-type))
   (ffi-to-ccl ff-type `(cffi:mem-ref (%macptr-ptr ,ptr) ,ff-type ,byte-offset)))
 
 
 (defbceval $bc-macptr-set (ptr byte-offset ff-type val)
+  (setq ff-type (ff-type ff-type))
   `(setf (cffi:mem-ref (%macptr-ptr ,ptr) ,ff-type ,byte-offset) ,(ccl-to-ffi ff-type val)))
   
 
@@ -739,7 +744,7 @@
   (cassert (= (length argspecs) (length argvals)))
   (cassert (string= "KERNEL-IMPORT-" name :end2 (length "KERNEL-IMPORT-")))
   (flet ((typecheck-for (ff-type form)
-           `(require-type ,form ',(ecase ff-type
+           `(require-type ,form ',(ecase (ff-type ff-type)
                                     (:pointer 'ccl-macptr)
                                     ((:uint64 :int64) 'ccl-integer)
                                     (:int32 '(signed-byte 32))
@@ -752,21 +757,21 @@
                              ,@(loop for argspec in argspecs for argval in argvals
                                  collect (typecheck-for argspec argval))))))
 
-(defbceval $bc-ff-call (entry argtypes argvals res-type)
-  (cassert (= (length argtypes) (length argvals)))
+(defbceval $bc-ff-call (entry argspecs argvals resultspec)
+  (cassert (= (length argspecs) (length argvals)))
   (let ((sym (and (consp entry)
                   (eq (car entry) '$bc-symbol-value)
                   (bc-unquote (cadr entry)))))
     (check-type sym ccl-symvector))
   (let* ((form `(cffi:foreign-funcall-pointer (cffi:make-pointer ,entry) ()
-                                              ,@(loop for type in argtypes for val in argvals
-                                                  collect type
-                                                  collect (case type
+                                              ,@(loop for ff-type in argspecs for val in argvals
+                                                  collect (setq ff-type (ff-type ff-type))
+                                                  collect (case ff-type
                                                             ((:int64 :uint64) `(native-number ,val))
                                                             (:pointer `(%macptr-ptr ,val))
                                                             (t val)))
-                                              ,res-type)))
-    (case res-type
+                                              ,(setq resultspec (ff-type resultspec)))))
+    (case resultspec
       ((:int64 :uint64) `(ccl-number ,form))
       (:pointer `(make-ccl-macptr ,form))
       (t form))))

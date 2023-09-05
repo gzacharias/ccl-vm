@@ -1,9 +1,16 @@
 (in-package :ccl-vm)
 
+(defvar *CCL-DIRECTORY*)
+
 (defmacro defun-inline (name args &body body)
   `(progn
      (declaim (inline ,name))
      (defun ,name ,args ,@body)))
+
+(defmacro defvar-typed (var type)
+  `(progn
+     (declaim (type ,type ,var))
+     (defvar ,var)))
 
 (defun-inline fixnump (x) (typep x 'fixnum))
 

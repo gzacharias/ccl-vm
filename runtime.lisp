@@ -1,40 +1,59 @@
 (in-package :ccl-vm)
 
-;;; TODO: ** Are all args to CCL quoted?  Maybe it should be a macro
-
-;;; package for FFI defs that should come from groveling
 (defpackage "CCL-FFI" (:use))
 
+(defparameter *lap-functions* nil)
 
-;;; CMAIN is a nilreg-relative symbol, so is accessible in the kernel.
-;;;  It gets set to XCMAIN which each architecture is supposed to define as a CALLBACK, i.e.
-;;;  a way for kernel to call us.   It seems to be called for signals.
-(%set-sym-value (ccl 'xcmain) 'callback-for-cmain?)
-(%set-sym-value (ccl '%xerr-disp) 'callback-for-%err-disp?)
+
+;;;; TODO: have some way to put lap functions in the CCL sources rather than the VM?
+;;;;   any reason to do that other than having the same structure as other backends?
+
+(defun register-lap-function (&rest args)
+  (if *loading-ccl*
+    (push args *lap-functions*)
+    ;; If deflapfunction is evaluated by other than wholesale reloading of the VM, then
+    ;; just update the defn in the vm that exists
+    (install-lap-function args)))
+
+(defun init-lap-functions ()
+  (loop while *lap-functions* do (install-lap-function (pop *lap-functions*)))
+  (makunbound '*lap-functions*)) ;; shouldn't ever reference this once initialized
+
+(defun install-lap-function (args)
+  (destructuring-bind (name bits type native-fn) args
+    (let* ((_name (ccl-symbol name))
+           (_fn (sym-fboundp _name)))
+      (when (and _fn *loading-ccl*) ;; means duplicate def...
+        (error "~s is already defined as ~s" _name _fn))
+      (when (null _fn)
+        (setf (sym-func _name) (setq _fn (cons-ccl-function))))
+      (setf (ccl-function-data _fn) (vector _name bits)) ;; could add arg info...
+      (setf (ccl-function-bclambda _fn) type)
+      (setf (ccl-function-native-fn _fn) native-fn))))
 
 (defmacro deflapfunction (name args-or-lap-name &body body)
-  (let ((lap-fn (if (listp args-or-lap-name)
-                  (intern (concatenate 'string "LAP-" (string name)) *native-package*)                  
-                  (require-type args-or-lap-name 'symbol)))
-        (env-p nil))
-    `(progn
-       ,(if (listp args-or-lap-name)
-          (if (setq env-p (member '&environment args-or-lap-name))
-            (let ((inner-args (butlast args-or-lap-name 2))
-                  (outer-args (list (cadr env-p) (gensym) (gensym))))
+  (if (and (symbolp args-or-lap-name) (null body))
+    `(register-lap-function ',name 0 'lap #',args-or-lap-name)
+    (let* ((lap-fn (intern (concatenate 'string "LAP-" (string name)) *native-package*))
+           (env-p (member '&environment args-or-lap-name))
+           (inner-args (if env-p (butlast args-or-lap-name 2) args-or-lap-name))
+           (bits (let ((opt-pos (position '&optional inner-args))
+                       (rest-pos (position '&rest inner-args)))
+                   (dpb (or opt-pos rest-pos (length inner-args)) $lfbits-numreq
+                        (dpb (if opt-pos (- (or rest-pos (length inner-args)) opt-pos 1) 0) $lfbits-numopt
+                             (if rest-pos (ash 1 $lfbits-rest-bit) 0))))))
+      (assert (null (set-difference (intersection inner-args lambda-list-keywords) '(&optional &rest))))
+      `(progn
+         ,(if env-p
+            (let ((outer-args (list (cadr env-p) (gensym) (gensym))))
               (assert (eql (length env-p) 2))
               `(defun ,lap-fn ,outer-args
                  (declare (ignore ,(cadr outer-args))) ;; self
                  (destructuring-bind ,inner-args ,(caddr outer-args)
                    ,@body)))
-            `(defun ,lap-fn ,args-or-lap-name ,@body))
-          (assert (null body)))
-       (let ((_name (ccl-symbol ',name))
-             (_fn (cons-ccl-function)))
-         (setf (ccl-function-data _fn) (vector _name 0)) ;; could add arg info...
-         (setf (ccl-function-bclambda _fn) ',(if env-p 'lap-with-env 'lap))
-         (setf (ccl-function-native-fn _fn) #',lap-fn)
-         (setf (sym-func _name) _fn)))))
+            `(defun ,lap-fn ,inner-args ,@body))
+         (register-lap-function ',name ,bits ',(if env-p 'lap-with-env 'lap) #',lap-fn)))))
+
 
 (deflapfunction fout (string &rest values)
   (fresh-line *trace-output*)
@@ -44,14 +63,14 @@
   (describe obj))
 
 (deflapfunction fbreak (str &rest args)
-  (apply #'break (native-string str) args)
-  )
+  (let ((*package* *native-package*))
+    (apply #'break (native-string str) args)))
 
 (deflapfunction %fasload (namestring)
   (let* ((filename (native-string namestring)))
-    (assert (equal (pathname-type filename) "cvmsrc"))
+    (assert (equal (pathname-type filename) "bc"))
     (when *loading-ccl*
-      ;; While loading up CCL, ignore specified directories, the whole CCL cvmsrc is in one directory.
+      ;; While loading up CCL, ignore specified directories, the whole CCL bc is in one directory.
       (setq filename (merge-pathnames (make-pathname :name (pathname-name filename)
                                                      :type (pathname-type filename)
                                                      :directory '(:relative "cvmsrcs"))
@@ -91,6 +110,11 @@
        (gvector-type-p (uvector-subtag obj))))
 
 
+(deflapfunction cvm-symbolp (obj)
+  (or (null obj)
+      (eq obj t)
+      (ccl-symvector-p obj)))
+
 ;; used e.g. by %make-rwlock-ptr
 ;;; TODO: the point is for this to be weak and finalizable
 (defparameter *gcable-pointers* nil)
@@ -122,26 +146,42 @@
                (and (typep val 'ccl-fixnum) val)))
         (error "Don't know how to %get-object ~s" addr))))
 
+
+(deflapfunction %macptr-domain (macptr)
+  ;; this seems to be a raw value that gets boxed by x8664 %macptr-domain!
+  (uvref macptr macptr.domain))
+
+(deflapfunction %set-macptr-domain (macptr val)
+  ;; x8664 unboxes the value before storing it in the uvector!! but it's a value like 1,
+  (check-type val ccl-fixnum)
+  (uvset macptr macptr.domain val))
+
+;; x8664 does the same unbox/unboxing here.  Is this for the kernel too look at or something?
+(deflapfunction %macptr-type (macptr)
+  (uvref macptr macptr.type))
+
+(deflapfunction %set-macptr-type (macptr val)
+  (check-type val ccl-fixnum)
+  (uvset macptr macptr.type val))
+
 ;; 'weak-gc-method  'batch-flag 'all-areas 'tenured-area 'statically-linked 'host-platform 'batch-flag
 ;; static-cons-area free-static-conses ret1valaddr 'ppc::altivec-present 'stack-size 'default-allocation-quantum
 ;; 'oldest-ephemeral
-
-;; exception-lock, area-lock
-(defvar *requested-native-values* nil)
-
 (deflapfunction cvm-get-kernel-global (name)
   (check-type name ccl-symvector)
-  (pushnew name *requested-native-values* :test #'uvector-equal)
-  (warn "Trying to get native value of ~s" name)
   (cond ((eq name (ccl'batch-flag))    0) ;; don't want batch mode
-        (t 37)))
+        ;; Known requests... what to do?
+        ((or (eq name (ccl 'stack-size))
+             (eq name (ccl 'default-allocation-quantum)))
+         37)
+        (t (warn "Trying to get native value of ~s" name)
+           73)))
 
-(defparameter *fake-heap-image-name* nil)
-(defparameter *fake-argv* (cffi:foreign-alloc :pointer :count 0 :null-terminated-p t))
+(defvar *fake-heap-image-name* nil)
+(defvar *fake-argv* (cffi:foreign-alloc :pointer :count 0 :null-terminated-p t))
 
 (deflapfunction cvm-get-kernel-global-ptr (name dest)
   (check-type name ccl-symvector)
-  (pushnew name *requested-native-values* :test #'uvector-equal)
   (check-type dest ccl-macptr)
   (setf (%macptr-value dest)
         (cond ((eq name (ccl'image-name))
@@ -152,8 +192,12 @@
                           ;; inside the ccl directory (if we just use the directory, last component gets stripped)
                           (namestring (make-pathname :name "cvmsrcs" :defaults *CCL-DIRECTORY*))))))
               ((eq name (ccl'argv)) *fake-argv*) ;;; *** TODO
+              ;; Known requests... what to do?
+              ((or (eq name (ccl 'area-lock))
+                   (eq name (ccl 'exception-lock)))
+               39)
               (t (warn "Trying to get native value of ~s (into ptr)" name)
-                 37)))
+                 93)))
   dest)
 
 #+hemlock(hemlock::defindent "defcstruct" 1)
@@ -209,6 +253,24 @@
 
 (cffi:defctype ccl-ffi::mach_msg_type_number_t :uint32)
 
+
+(cffi:defcstruct ccl-ffi::dirent
+  (ccl-ffi::d_ino :uint64)
+  (ccl-ffi::d_seekoff :uint64)
+  (ccl-ffi::d_reclen :uint16)
+  (ccl-ffi::d_namlen :uint16)
+  (ccl-ffi::d_type :uint8)
+  (ccl-ffi::d_name :uint8 :count 1024))
+
+;; This is what we seem to get from ff-readdir
+(cffi:defcstruct ccl-ffi::dirent32
+  (ccl-ffi::d_ino :uint32)
+  (ccl-ffi::d_reclen :uint16)
+  (ccl-ffi::d_type :uint8)
+  (ccl-ffi::d_namlen :uint8)
+  (ccl-ffi::d_name :uint8 :count 1024))
+
+
 (defun cffi-symbol (sym)
   (intern (sym-native-pname sym) :ccl-ffi))
 
@@ -228,6 +290,10 @@
 
 ;;; *** TODO: I think the change I made to accept  record.field in record-size might be confused as to whether you are looking
 ;;;   at an embedded structure or a pointer to a structure?  CHeck it out.
+
+;; CFFI patch.  Make it so CFFI:FOREIGN-SLOT-COUNT doesn't err out on non-aggregate fields, just returns 1.
+; Not needed after all?
+;(defmethod cffi::slot-count ((slot t)) 1)
 
 (deflapfunction cvm-access-foreign-field (ccl-ptr path bit-offset)
   (cassert (eql 0 bit-offset))
@@ -288,8 +354,12 @@
 (defconstant CCL-FFI::S_IFLNK #xA000)
 (defconstant CCL-FFI::S_IFIFO #x1000)
 (defconstant CCL-FFI::SEEK_CUR 1)
+(defconstant CCL-FFI::SEEK_SET 0)
 (defconstant CCL-FFI::O_RDONLY 0)
+(defconstant CCL-FFI::O_WRONLY 1)
 (defconstant CCL-FFI::O_RDWR 2)
+(defconstant CCL-FFI::O_CREAT #x200)
+(defconstant CCL-FFI::O_EXCL #x800)
 (defconstant CCL-FFI::EAI_AGAIN 2)
 (defconstant CCL-FFI::EAI_FAIL 4)
 (defconstant CCL-FFI::EAI_NONAME 8)
@@ -298,6 +368,7 @@
 (defconstant CCL-FFI::EINTR 4)
 (defconstant CCL-FFI::ENOMEM 12)
 (defconstant CCL-FFI::EACCES 13)
+(defconstant CCL-FFI::EEXIST 17)
 (defconstant CCL-FFI::ENFILE 23)
 (defconstant CCL-FFI::EMFILE 24)
 (defconstant CCL-FFI::EAGAIN 35)
@@ -323,11 +394,12 @@
 (defconstant CCL-FFI::AF_UNIX 1)
 
 
+
 (deflapfunction cvm-os-constant (symvec)
   (check-type symvec ccl-symvector)
   (let* ((sym (cffi-symbol symvec)))
-    (unless (boundp sym)
-      (error "Don't know how to get OS constant ~s" symvec))
+    (loop until (boundp sym)
+      do (cerror "Try again" "Don't know how to get OS constant ~s" symvec))
     (symbol-value sym)))
 
 
@@ -404,6 +476,16 @@
   (opt_value :pointer)
   (opt_len :pointer))
 
+(def-external-call "rename" :int
+  (old :pointer)
+  (new :pointer))
+
+(def-external-call "unlink" :int
+  (path :pointer))
+
+
+
+
 (defun get-external-fn (sym)
   (let ((name (sym-native-pname sym)))
     (or (cdr (assoc name *known-c-functions-alist* :test 'equal))
@@ -447,6 +529,10 @@
   (check-type digit (unsigned-byte 32))
   (check-type count (unsigned-byte 8))
   (ash (u32-sign-extend digit) (- count)))
+
+
+(deflapfunction %iash (digit count)
+  (ash digit count))
 
 
 (deflapfunction %ashl (digit count)
@@ -581,16 +667,10 @@
 
 ;;;
 ;;; This is basically a big hash table of all the CCL objects that are ever stored in an EQ hash table.
-;;; **TODO: add a fake address slot to ccl-uvector and get rid of this...
-;; This gets big, because there is an eq hash table of functions to lfun names.
+;;; **TODO: add a fake address slot to ccl-uvector and get rid of this... Or at least for functions:
+;;; this gets big, because there is an eq hash table of lfuns to lfun names.  
 ;; (at end of loading ccl: (CCL-STRUCT . 2) (CCL-SIMPLE-VECTOR . 2) (CCL-PACKAGE . 9) (CONS . 92) (CCL-FUNCTION . 7800)
-(defparameter *fake-addresses-table* (make-hash-table :test 'eq
-                                                      #+ccl :weak #+ccl t
-                                                      #+sbcl :weakness #+sbcl :key
-                                                      #+lispworks :weak-kind #+lispworks :key
-                                                      #+allegro :weak-keys #+allegro t
-                                                      #-(or ccl sbcl lispworks allegro) (error "Need to make weak hash table")))
-
+(defvar-typed *fake-addresses-table* hash-table)
 
 ;; for instance hash, the address is just used as an initial hash, but
 ;; must not conflict with max-class-ordinal, so put things above there
@@ -711,6 +791,10 @@
   (fd  :int)
   (buf :pointer))
 
+(cffi:defcfun (ff-lstat "lstat$INODE64") :int
+  (path :pointer)
+  (buf :pointer))
+
 (cffi:defcfun (ff-lseek "lseek") ccl-ffi::offset_t
   (fd :int)
   (offset ccl-ffi::offset_t)
@@ -735,6 +819,19 @@
   (buf :pointer)
   (count ccl-ffi::size_t))
 
+(cffi:defcfun (ff-opendir "opendir") :pointer
+  (filename :pointer))
+
+(cffi:defcfun (ff-closedir "closedir") :int
+  (dir :pointer))
+
+(cffi:defcfun (ff-readdir "readdir") :pointer
+  (dir :pointer))
+
+(cffi:defcfun (ff-ftruncate "ftruncate") :int
+  (fd :int)
+  (length ccl-ffi::offset_t))
+
 (defun kernel-import-lisp-lseek (fd offset whence) (ff-lseek fd offset whence))
 
 (defun kernel-import-lisp-open (ptr flags mode) (ff-open (%macptr-ptr ptr) flags mode))
@@ -744,6 +841,22 @@
 (defun kernel-import-lisp-read (fd buf count) (ff-read fd (%macptr-ptr buf) count))
 
 (defun kernel-import-lisp-write (fd buf count) (ff-write fd (%macptr-ptr buf) count))
+
+(defun kernel-import-lisp-opendir (filename) 
+  (make-ccl-macptr (ff-opendir (%macptr-ptr filename))))
+
+(defun kernel-import-lisp-closedir (dir) (ff-closedir (%macptr-ptr dir)))
+
+(defun kernel-import-lisp-readdir (dir)
+  (let ((dirent (ff-readdir (%macptr-ptr dir))))
+    ;; The caller expects dirent, but we seem to get dirent32
+    (unless (cffi:null-pointer-p dirent)
+      (unless (eql 0 (cffi:foreign-slot-value dirent '(:struct ccl-ffi::dirent32) 'ccl-ffi::d_namlen))
+        ;; we have a dirent32.  The only thing the caller cares about is d_name, so rearrage it so
+        ;; d_name appears where they expect it 
+        (cffi:incf-pointer dirent (- (cffi:foreign-slot-offset '(:struct ccl-ffi::dirent32) 'ccl-ffi::d_name)
+                                     (cffi:foreign-slot-offset '(:struct ccl-ffi::dirent) 'ccl-ffi::d_name)))))
+    (make-ccl-macptr dirent)))
 
 
 (defun kernel-import-lisp-gettimeofday (ptimeval ptz)
@@ -761,6 +874,14 @@
 
 (defun kernel-import-lisp-fstat (fd statptr)
   (ff-fstat fd (%macptr-ptr statptr)))
+
+(defun kernel-import-lisp-lstat (nameptr statptr)
+  (assert (not (eql 0 (%macptr-value statptr)))) ;; for debuggging
+  (ff-lstat (%macptr-ptr nameptr) (%macptr-ptr statptr)))
+
+(defun kernel-import-lisp-ftruncate (fd length)
+  (ff-ftruncate fd length))
+
 
 (cffi:defcvar ("errno" *ff-errno*) :int)
 
@@ -791,15 +912,9 @@
         (error "Can't find symbol ~s" (cffi:foreign-string-to-lisp name-ptr)))
       val)))
 
-
-(let ((lock (make-rw-lock-obj)))
-  (setf (sym-value (ccl '%all-packages-lock%)) lock)
-  (setf (sym-value (ccl '%system-locks%)) (make-uvector subtag-population (vector 0 0 (gvref lock 0)))))
-
-
 (defconstant node-size 8)
 
-;; No threads, no big deal!  Except we have to reverse-engineer the offset
+;; No threads, no problem!  Except we have to reverse-engineer the offset
 ;; offset = 8*(index+1) - tag
 (defun uvector-offset-to-cell-index (uvec offset)
   (cassert (gvector-type-p (uvector-subtag uvec)))
@@ -1110,21 +1225,14 @@
 ;;;    Generic functions
 
 (defmacro def-gf-proto (name args-or-lap-name &body body)
-  `(let* ((sym (ccl-symbol ',name))
-          (fn (%make-ccl-function :subtag subtag-function
-                                  :data (vector sym 0)
-                                  :bclambda 'gf-proto
-                                  :native-fn ,(if (listp args-or-lap-name)
+  `(register-lap-function ',name 0 'gf-proto ,(if (listp args-or-lap-name)
                                                 `(named-function ,name ,args-or-lap-name ,@body)
-                                                `(function ,args-or-lap-name)))))
-     (setf (sym-func sym) fn)))
+                                                `(function ,args-or-lap-name))))
 
 (def-gf-proto gag-any-arg (env self args)
   (let ((dt (gvref self 2))
         (dcode (gvref self 3)))
     (apply-in-environment env dcode (list dt args))))
-
-(%defvar (ccl '*gf-proto*) nil 'variable (sym-func (ccl 'gag-any-arg)))
 
 (def-gf-proto gag-one-arg (env self args)
   (assert (eql (length args) 1))
@@ -1271,22 +1379,54 @@
   (check-type fn ccl-function)
   (gvset fn index value))
 
-(deflapfunction make-bclambda-lfun (bclambda)
-  (make-ccl-function bclambda))
+;; Here bclambda is coming out of the compiler (as opposed to a BC file), so it's entirely a VM object.
+;; We want the BC operators to be native symbols. Fortunately this can be done unambiguously because
+;; a bclambda has no unquoted symbols other than operators.  Just have to be careful not to convert
+;; any quoted symbols.
+(deflapfunction make-bclambda-lfun (ccl-bclambda)
+  (labels ((nativize-ops (expr)
+             (if (atom expr)
+               expr
+               (let* ((op (car expr))
+                      (sym (and (ccl-symvector-p op) (native-symbol op))))
+                 (if (eq sym '$bc-quote)
+                   (cons '$bc-quote (cdr expr))
+                   (cons (if (not (member sym '(t nil)))
+                           (progn
+                             (assert (or (eq sym 'bclambda) (starts-with-subseq "$BC-" (symbol-name sym))))
+                             sym)
+                           (nativize-ops op))
+                         (mapcar #'nativize-ops (cdr expr))))))))
+    (let ((bclambda (nativize-ops ccl-bclambda)))
+      (assert (and (consp bclambda) (eq (car bclambda) 'bclambda)))
+      (init-ccl-function (cons-ccl-function) bclambda))))
 
-;; for fasdumping
+;; Return bclambda as a VM object, e.g. for fasdumping.  Reverse of make-bclambda-lfun
 (deflapfunction lfun-bclambda (fn)
-  (ccl-function-bclambda fn))
+  (labels ((vmify-ops (expr)
+             (if (atom expr)
+               expr
+               (let ((op (car expr)))
+                 (if (eq op '$bc-quote)
+                   (cons (ccl-symbol '$bc-quote) (cdr expr))
+                   (cons (if (and (symbolp op) (not (member op '(t nil))))
+                           (progn
+                             (assert (or (eq op 'bclambda) (starts-with-subseq "$BC-" (symbol-name op))))
+                             (ccl-symbol op))
+                           (vmify-ops op))
+                         (mapcar #'vmify-ops (cdr expr))))))))
+    (vmify-ops (ccl-function-bclambda fn))))
 
 (deflapfunction cvm-xdisassemble (fn)
   (let ((bclambda (ccl-function-bclambda fn)))
-    (if (consp bclambda)
-      (let ((*print-pretty* t)
-            #+ccl (ccl::*print-right-margin* 200)
-            (*package* *native-package*))
-        (print (bclambda-lambda bclambda))
-        nil)
-      (disassemble (ccl-function-native-fn fn)))))
+    (cond ((consp bclambda)
+           (assert (eq (car bclambda) 'bclambda)) ;; native object
+           (let ((*print-pretty* t)
+                 (*print-right-margin* 200)
+                 (*package* *native-package*))
+             (print (bclambda-lambda bclambda))))
+          (t (disassemble (ccl-function-native-fn fn))))
+    nil))
 
 
 (deflapfunction values (&rest the-values)
@@ -1301,37 +1441,37 @@
     (error "~s heap vectors not supported" (subtag-typekey subtag)))
   (let ((ptr (%macptr-ptr ptr)))
     (setf (cffi:mem-ref ptr :uint64) num-elts)
-    (make-uvector subtag ptr)))
+    (make-uvector subtag (cffi:inc-pointer ptr 8))))
 
 
 ;; set ptr to point to the actual vector data
 (deflapfunction %vect-data-to-macptr (vect ptr)
   (with-uvector-data (data vect)
-    (setf (%macptr-value ptr) (+ (cffi:pointer-address data) 8))
+    (setf (%macptr-value ptr) (cffi:pointer-address data))
     (error "not a heap vector: ~s" vect))
   ptr)
 
-;; set ptr to the address to pass to free
+;; set ptr to the address to pass to _free
 (deflapfunction %%make-disposable (ptr vect)
   (with-uvector-data (data vect)
-    (setf (%macptr-value ptr) data)
+    (setf (%macptr-value ptr) (- (cffi:pointer-address data) 8))
     (error  "Not a heap vector: ~s" vect)))
 
 (defun heap-vector-uvref (uvec index)
   (let* ((subtag (uvector-subtag uvec))
          (ptr (uvector-data uvec)))
-    (assert (< index (cffi:mem-ref ptr :uint64)))
+    (assert (< index (cffi:mem-ref ptr :uint64 -8)))
     (cffi:mem-aref ptr (svref *subtag-ffi-types* subtag) index)))
 
 (defun heap-vector-uvset (uvec index val)
   (let* ((subtag (uvector-subtag uvec))
          (ptr (uvector-data uvec)))
-    (assert (< index (cffi:mem-ref ptr :uint64)))
+    (assert (< index (cffi:mem-ref ptr :uint64 -8)))
     (setf (cffi:mem-aref ptr (svref *subtag-ffi-types* subtag) index) val)))
 
 (defun heap-vector-uvsize (uvec)
   (let* ((ptr (uvector-data uvec)))
-    (cffi:mem-ref ptr :uint64)))
+    (cffi:mem-ref ptr :uint64 -8)))
 
 
 
@@ -1344,19 +1484,27 @@
   (assert (not (eq src dest))) ;; not needed
   (let* ((utype (svref *subtag-ffi-types* (uvector-subtag src))))
     (assert (and utype (eq utype (svref *subtag-ffi-types* (uvector-subtag dest))))) ;; not needed
-    (let ((count (case utype
-                   ((:int8 :uint8) nbytes)
-                   ((:int16 :uint16)
-                    ;; really just need to make sure when one of them is a string, we convert to characters
-                    (assert (eq (uvector-subtag src) (uvector-subtag dest)))
-                    (ash (+ nbytes 1) -1))
-                   ((:int32 :uint32) (ash (+ nbytes 3) -2))
-                   ((:int64 :uint64) (ash (+ nbytes 7) -3))
-                   (t (error "Cant copy ~s vectors" (subtag-typekey (uvector-subtag src)))))))
-      (loop for si upfrom src-byte-offset for di upfrom dest-byte-offset for n from 0 below count
+    ;; Reverse engineer the offsets
+    (let* ((src-offset src-byte-offset)
+           (dest-offset dest-byte-offset)
+           (count nbytes))
+      (case utype
+        ((:int8 :uint8))
+        ((:int16 :uint16)
+         (assert (= (logand #b1 src-offset) (logand #b1 dest-offset) (logand #b1 count) 0))
+         (setq count (ash count -1) src-offset (ash src-offset -1) dest-offset (ash dest-offset -1)))
+        ((:int32 :uint32)
+         ;; really just need to make sure when one of them is a string, we convert to characters
+         (assert (eq (uvector-subtag src) (uvector-subtag dest)))
+         (assert (= (logand #b11 src-offset) (logand #b11 dest-offset) (logand #b11 count) 0))
+         (setq count (ash count -2) src-offset (ash src-offset -2) dest-offset (ash dest-offset -2)))
+        ((:int64 :uint64)
+         (assert (= (logand #b111 src-offset) (logand #b111 dest-offset) (logand #b111 count) 0))
+         (setq count (ash count -3) src-offset (ash src-offset -3) dest-offset (ash dest-offset -3)))
+        (t (error "Cant copy ~s vectors" (subtag-typekey (uvector-subtag src)))))
+      (loop for si upfrom src-offset for di upfrom dest-offset for n from 0 below count
         do (setf (uvref dest di) (uvref src si))))
     dest))
-
 
 
 (deflapfunction get-saved-register-values ()
@@ -1461,12 +1609,14 @@
 (deflapfunction native-stream-write-char (which c)
   (write-char c (aref *native-streams* which)))
 
-;; SHould defmethod for sbc. It's insane!!!
 (deflapfunction native-stream-line-column (which)
   ;; Assume everybody makes gray streams available to cl-user...
-  #-sbcl (cl-user::stream-line-column (aref *native-streams* which))
-  #+sbcl (sb-kernel:charpos (aref *native-streams* which)))
+  (cl-user::stream-line-column (aref *native-streams* which)))
   
+#+sbcl
+(defmethod cl-user::stream-line-column ((stream file-stream))
+  (sb-kernel:charpos stream))
+
 (deflapfunction native-stream-set-column (which column)
   (if (eql column 0)
     (fresh-line (aref *native-streams* which))

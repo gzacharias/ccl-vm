@@ -27,6 +27,14 @@
 (defconstant $sym_fbit_constant_fold (+ 8 $sym_vbit_constant))
 (defconstant $sym_fbit_fold_subforms (+ 8 $sym_vbit_global))
 
+(defvar-typed *cl-pkg* ccl-package)
+(defvar-typed *keyword-pkg* ccl-package)
+(defvar-typed *ccl-pkg* ccl-package)
+(defvar-typed *target-pkg* ccl-package)
+(defvar-typed *os-pkg* ccl-package)
+(defvar-typed *ffi-pkg* ccl-package)
+
+
 (defun make-ccl-symvector (pname &optional (flags 0) (value *unbound-marker*))
   (check-type pname ccl-simple-string)
   (%make-ccl-symvector :subtag subtag-symvector
@@ -41,11 +49,11 @@
 ;; Early symbols, will get interned once packages are set up.
 (defvar *early-ccl-syms* nil)
 
-(defmacro def-early-sym (var pname &rest inits)
+(defmacro def-early-sym (var pname &rest flags-and-value)
   `(progn
-     (defparameter ,var (make-ccl-symvector (ccl-string ,pname) ,@inits))
-     (push (cons ,pname ,var) *early-ccl-syms*)
-     ',var))
+     (push (cons (make-ccl-symvector (ccl-string ,pname) ,@flags-and-value)  ',var) *early-ccl-syms*)
+     (defvar-typed ,var ccl-symvector)))
+
 
 (def-early-sym *nil-sym* "NIL" (logior (ash 1 $sym_vbit_special) (ash 1 $sym_vbit_constant)) nil)
 (def-early-sym *t-sym* "T" (logior (ash 1 $sym_vbit_special) (ash 1 $sym_vbit_constant)) T)
@@ -67,7 +75,6 @@
   (native-string (sym-pname sym)))
 
 (def-uvector-print-text :symvector sym-print-text (sym)
-  (declare (special *cl-pkg* *ccl-pkg* *keyword-pkg*))
   (setq sym (sym-symvector sym))
   (let ((pkg (sym-pkg sym)))
     (if (eq pkg *cl-pkg*)
@@ -82,25 +89,8 @@
 
 
 ;; Since we're single-threaded, there is only one value, and that is the global value!
-(defun %sym-value (sym)
-  #+vm-threads (let* ((symvec (sym-symvector sym))
-                      (index (gvref symvec sym.binding-index)))
-                 (if (and (< index (length *level-0-special-bindings-vector*))
-                          (not (eq *no-thread-local-binding-marker*
-                                   (aref *level-0-special-bindings-vector* index))))
-                   (svref *level-0-special-bindings-vector* index)
-                   (gvref symvec sym.vcell)))
-  #-vm-threads (gvref (sym-symvector sym) sym.vcell))
-
-(defun %set-sym-value (sym value)
-  #+vm-threads (let* ((symvec (sym-symvector sym))
-                      (index (gvref symvec sym.binding-index)))
-                 (if (and (< index (length *special-bindings-vector*))
-                          (not (eq *no-thread-local-binding-marker*
-                                   (aref *special-bindings-vector* index))))
-                   (setf (aref *special-bindings-vector* index) value)
-                   (setf (gvref symvec sym.vcell) value)))
-  #-vm-threads (setf (gvref (sym-symvector sym) sym.vcell) value))
+(defun %sym-value (sym) (gvref (sym-symvector sym) sym.vcell))
+(defun %set-sym-value (sym value) (setf (gvref (sym-symvector sym) sym.vcell) value))
 
 (defun sym-boundp (sym)
   (not (eq (%sym-value sym) *unbound-marker*)))
@@ -185,7 +175,7 @@
 
 (def-uvector-subtype :package (ccl-package (:constructor %make-ccl-package) (:subtag-conser t)))
 
-;; This is defined in lispequ is is architecture-independent.
+;; This is defined in lispequ, so is architecture-independent.
 (defconstant pkg.itab 0)
 (defconstant pkg.etab 1)
 (defconstant pkg.used 2)
@@ -323,7 +313,6 @@
 
 
 (defun add-sym-to-pkg (sym pkg &optional (export-p nil))
-  (declare (special *keyword-pkg*))
   (setq sym (sym-symvector sym))
   (check-type sym ccl-symvector)
   (check-type pkg ccl-package)
@@ -364,79 +353,6 @@
       sym
       (add-sym-to-pkg (make-ccl-symvector name) pkg))))
 
-(defun initial-pkg (native-names use)
-  (let* ((names (mapcar #'ccl-string native-names))
-         (pkg-vec (vector
-                   (%new-htab 0) ;; itab
-                   (%new-htab 0) ;; etab
-                   () ;; used
-                   ()  ;; used-by
-                   names ;; names
-                   ()  ;; shadowed
-                   nil ;;u lock - will get added by l0-aprims
-                   nil ;; intern-hook
-                   ))
-         (pkg (%make-ccl-package :subtag subtag-package :data pkg-vec))
-         (pkgs-to-use (mapcar #'(lambda (s)
-                                  (or (find (ccl-string s) (sym-value *all-packages-sym*) :test #'pkg-name-p)
-                                      (error "No initial package named ~s" s)))
-                              use))
-         (added nil)
-         (done nil))
-    (unwind-protect
-        (loop for other in pkgs-to-use
-          do (push other (svref pkg-vec pkg.used))
-          do (let ((other-vec (gvector-data other)))
-               (push other-vec added)
-               (push pkg (svref other-vec pkg.used-by)))
-          finally (setq done t))
-      (if done
-        (push pkg (sym-value *all-packages-sym*))
-        (loop for other-vec in added
-          do (setf (svref other-vec pkg.used-by)
-                   (remove pkg (svref other-vec pkg.used-by))))))
-    (dolist (name names)
-      (register-package-ref name pkg))
-    pkg))
-
-(defparameter *cl-pkg*      (initial-pkg '("COMMON-LISP" "CL") ()))
-(defparameter *keyword-pkg* (initial-pkg '("KEYWORD") ()))
-(defparameter *ccl-pkg*     (initial-pkg '("CCL") '("COMMON-LISP")))
-(defparameter *target-pkg*  (initial-pkg '("CVM" "TARGET") '("COMMON-LISP")))
-(defparameter *os-pkg*      (initial-pkg '("CVM-DARWIN64" "OS") '("COMMON-LISP")))
-(defparameter *ffi-pkg*     (initial-pkg '("CVMDARWIN-FFI") ()))
-
-;; Initialize the COMMON-LISP package..  Assume our host is compliant and just copy theirs.
-;;  Has to happen before we start loading references to CL symbols in ccl package files...
-(do-external-symbols (native-sym :common-lisp)
-  (let* ((native-pname (symbol-name native-sym))
-         (pname (ccl-string native-pname)))
-    (assert (not (sym-in-pkg-p pname *cl-pkg*)))
-    (add-sym-to-pkg (let ((early (assoc native-pname *early-ccl-syms* :test 'equal)))
-                      (or (when early
-                            (setq *early-ccl-syms* (remove early *early-ccl-syms*))
-                            (cdr early))
-                          (make-ccl-symvector pname)))
-                    *cl-pkg*
-                    t)))
-
-(loop while *early-ccl-syms*
-  for (nil . sym)  = (pop *early-ccl-syms*)
-  do (add-sym-to-pkg sym *ccl-pkg*)
-  finally (makunbound '*early-ccl-syms*))
-
-;; So there is this weird thing:
-;;  In ccl-export-syms, we export symbols from CCL.
-;;  In order to be exported from CCL, the symbols have to be present in the package.  5 of those
-;;  symbols are actually CL symbols and are normally just inherited by CCL. In the bootstrapping
-;;  version, they are also present in CCL because, well, they have always been and so always will be.
-;;  Since we create the package from scratch, we have to do it explicitly.
-(add-sym-to-pkg (find-sym-in-pkg (ccl-string "ADD-METHOD") *cl-pkg*) *ccl-pkg*)
-(add-sym-to-pkg (find-sym-in-pkg (ccl-string "COMPUTE-APPLICABLE-METHODS") *cl-pkg*) *ccl-pkg*)
-(add-sym-to-pkg (find-sym-in-pkg (ccl-string "METHOD-QUALIFIERS") *cl-pkg*) *ccl-pkg*)
-(add-sym-to-pkg (find-sym-in-pkg (ccl-string "REMOVE-METHOD") *cl-pkg*) *ccl-pkg*)
-(add-sym-to-pkg (find-sym-in-pkg (ccl-string "STYLE-WARNING") *cl-pkg*) *ccl-pkg*)
-
 (defparameter *native-package* (symbol-package '*native-package*))
 
 (defun ccl-symbol (symbol)
@@ -469,4 +385,79 @@
   (assert (eq (sym-pkg sym) *keyword-pkg*))
   (intern (sym-native-pname sym) :keyword))
 
+(defun init-packages ()
+  ;; Make sure all early sym vars are defined before running any code that might reference them.
+  (loop for (symvec . var) in *early-ccl-syms* do (set var symvec))
+  (flet ((initial-pkg (native-names use)
+           (let* ((names (mapcar #'ccl-string native-names))
+                  (pkg-vec (vector
+                            (%new-htab 0) ;; itab
+                            (%new-htab 0) ;; etab
+                            () ;; used
+                            ()  ;; used-by
+                            names ;; names
+                            ()  ;; shadowed
+                            nil ;;u lock - will get added by l0-aprims
+                            nil ;; intern-hook
+                            ))
+                  (pkg (%make-ccl-package :subtag subtag-package :data pkg-vec))
+                  (pkgs-to-use (mapcar #'(lambda (s)
+                                           (or (find (ccl-string s) (sym-value *all-packages-sym*) :test #'pkg-name-p)
+                                               (error "No initial package named ~s" s)))
+                                       use))
+                  (added nil)
+                  (done nil))
+             (unwind-protect
+                 (loop for other in pkgs-to-use
+                   do (push other (svref pkg-vec pkg.used))
+                   do (let ((other-vec (gvector-data other)))
+                        (push other-vec added)
+                        (push pkg (svref other-vec pkg.used-by)))
+                   finally (setq done t))
+               (if done
+                 (push pkg (sym-value *all-packages-sym*))
+                 (loop for other-vec in added
+                   do (setf (svref other-vec pkg.used-by)
+                            (remove pkg (svref other-vec pkg.used-by))))))
+             (dolist (name names)
+               (register-package-ref name pkg))
+             pkg)))
+    (setq *cl-pkg*      (initial-pkg '("COMMON-LISP" "CL") ()))
+    (setq *keyword-pkg* (initial-pkg '("KEYWORD") ()))
+    (setq *ccl-pkg*     (initial-pkg '("CCL") '("COMMON-LISP")))
+    (setq *target-pkg*  (initial-pkg '("CVM" "TARGET") '("COMMON-LISP")))
+    (setq *os-pkg*      (initial-pkg '("CVM-DARWIN64" "OS") '("COMMON-LISP")))
+    (setq *ffi-pkg*     (initial-pkg '("CVMDARWIN-FFI") ())))
+
+ ;; Initialize the COMMON-LISP package..  Assume our host is compliant and just copy theirs.
+  ;; Has to happen before we start loading files with references to CL symbols in ccl package,
+  ;; else get they created as ccl symbols.
+  (do-external-symbols (native-sym :common-lisp)
+    (let ((pname (ccl-string (symbol-name native-sym))))
+      (assert (not (sym-in-pkg-p pname *cl-pkg*)))
+      (add-sym-to-pkg (let ((early (assoc pname *early-ccl-syms* :test #'uvector-equal :key #'sym-pname)))
+                        (or (when early
+                              (setq *early-ccl-syms* (remove early *early-ccl-syms*))
+                              (car early))
+                            (make-ccl-symvector pname)))
+                      *cl-pkg*
+                      t)))
+  (loop while *early-ccl-syms*
+    for symvec = (car (pop *early-ccl-syms*))
+    do (add-sym-to-pkg symvec *ccl-pkg*)
+    finally (makunbound '*early-ccl-syms*))
+
+  ;; So there is this weird thing:
+  ;;  In ccl-export-syms, we export a bunch of symbols from CCL.
+  ;;  In order to be exported from CCL, the symbols have to be present in the package.  5 of those
+  ;;  symbols are actually CL symbols that are inherited by CCL. In the bootstrapping
+  ;;  version, they are also present in CCL because, well, they have always been and so always will be.
+  ;;  Since we create the package from scratch, we have to do it explicitly.
+  (add-sym-to-pkg (find-sym-in-pkg (ccl-string "ADD-METHOD") *cl-pkg*) *ccl-pkg*)
+  (add-sym-to-pkg (find-sym-in-pkg (ccl-string "COMPUTE-APPLICABLE-METHODS") *cl-pkg*) *ccl-pkg*)
+  (add-sym-to-pkg (find-sym-in-pkg (ccl-string "METHOD-QUALIFIERS") *cl-pkg*) *ccl-pkg*)
+  (add-sym-to-pkg (find-sym-in-pkg (ccl-string "REMOVE-METHOD") *cl-pkg*) *ccl-pkg*)
+  (add-sym-to-pkg (find-sym-in-pkg (ccl-string "STYLE-WARNING") *cl-pkg*) *ccl-pkg*)
+
+)
 

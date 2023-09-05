@@ -3,21 +3,50 @@
 ;; Maybe should load nfasload and just comment out %fasload?  I think there is a mechanism for
 ;; different fasload backends already!
 
-;;;;; For testing only
-(defun test-load ()
-  (cl-user::load-cvm) ;; reload virtual machine sources, in case changed also redoes the init.
-  ;; TODO: make a link from cvm:ccl; to actual ccl sources so don't have to build in these assumptions
-  (load-cvmsrcs (truename (merge-pathnames "../../ccl/" (truename "cvm:")))))
-(import 'test-load :cl-user)
-#+ccl (import 'test-load :ccl)
 
-(defvar *CCL-DIRECTORY*)
+;;;;; For testing only
+#+ccl (progn
+        (defun test-load (&optional recompile)
+          (load-cvm)
+          (ccl::compile-cvm recompile) ;; make sure we have the latest BC
+          (let ((*package* *native-package*)) ;;for debugging, so get this package in break loops
+            ;; TODO: make a link from cvm:ccl; to actual ccl sources so don't have to build in these assumptions
+            (load-ccl (truename (merge-pathnames "../../ccl/" (truename "cvm:"))))))
+        (import 'test-load :cl-user)
+        (import 'test-load :ccl))
 
 (defparameter *loading-ccl* nil)
 
+(defun cloop ()
+  (let ((*package* *native-package*)) ;; for debugging
+    (ccl-funcall *ccl-toplevel-func*)))
+(import 'cloop :cl-user)
+#+ccl (import 'cloop :ccl)
+
 ;;; ~5 mins
-(defun load-cvmsrcs (&optional (ccl-directory "CCL:"))
+(defun load-ccl (&optional (ccl-directory "CCL:"))
   (let ((*loading-ccl* t))
+    (init-packages)
+    (init-lap-functions)
+    ;;; CMAIN is a nilreg-relative symbol, so is accessible in the kernel.
+    ;;;  It gets set to XCMAIN which each architecture is supposed to define as a CALLBACK, i.e.
+    ;;;  a way for kernel to call us.   It seems to be only called for signals.
+    (%set-sym-value (ccl-symbol 'xcmain) 'callback-for-cmain?)
+    (%set-sym-value (ccl-symbol '%xerr-disp) 'callback-for-%err-disp?)
+    ;; Table for any time ccl wants the address of something.
+    (setq *fake-addresses-table* (make-hash-table :test 'eq
+                                                  #+ccl :weak #+ccl t
+                                                  #+sbcl :weakness #+sbcl :key
+                                                  #+lispworks :weak-kind #+lispworks :key
+                                                  #+allegro :weak-keys #+allegro t
+                                                  #-(or ccl sbcl lispworks allegro) (error "Need to make a weak hash table")))
+    
+    (setf (sym-value (ccl-symbol '*gf-proto*)) (sym-func (ccl 'gag-any-arg)))
+    
+    (let ((lock (make-rw-lock-obj)))
+      (setf (sym-value (ccl-symbol '%all-packages-lock%)) lock)
+      (setf (sym-value (ccl-symbol '%system-locks%)) (make-uvector subtag-population (vector 0 0 (gvref lock 0)))))
+    
     (cvm-load-level-0 ccl-directory)
     ;; Ok, so this sets toplevel function at the end then throws to toplevel...
     ;; The toplevel func basically calls #'toplevel-loop
@@ -25,16 +54,17 @@
       (let ((*load-verbose* t))
         (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*))))))
   
-  (setf (sym-value (ccl'*listener-prompt-format*)) (ccl "~[cvm?~:;~:*~d >~] "))
-  #+ccl (loop while (read-char-no-hang ccl::*stdin*)) ;; needed when restarting after errors, when using AltConsole for some reason
-  (format t "~&CCL-VM LOADED, Should ~s" '(ccl-funcall *ccl-toplevel-func*)))
+  (setf (sym-value (ccl'*listener-prompt-format*)) (ccl "~[ccl?~:;~:*ccl ~d >~] "))
+  #+ccl (clear-input ccl::*stdin*) ;; for some reason, needed when restarting after errors when using AltConsole 
+  (format t "~&CCL-VM LOADED, now can ~s" '(ccl-funcall *ccl-toplevel-func*)))
+
 
 ;; Build things up to the point where in the bootstrapping version, the heap image
 ;; has been loaded and all the initializations in %toplevel-function% in nfasload
 ;; have been executed up.
 (defun cvm-load-level-0 (ccl-directory)
   (setq *CCL-DIRECTORY* (truename ccl-directory)) ;; VM needs this.
-  (let* ((files (sort (directory (merge-pathnames "cvmsrcs/level-0/*.cvmsrc" *ccl-directory*))
+  (let* ((files (sort (directory (merge-pathnames "cvmsrcs/level-0/*.bc" *ccl-directory*))
                       #'string-lessp :key #'pathname-name))
          (calls (loop for file in files
                   unless (string-equal (pathname-name file) "nfasload")
@@ -48,6 +78,13 @@
     (%defvar (ccl-symbol '*ccl-package*) () 'variable *ccl-pkg*)
     (%defvar (ccl '*common-lisp-package*) () 'variable *cl-pkg*)
     (%defconstant (ccl '%unbound-function%) *unbound-function*)
+    (%defvar (ccl '%builtin-functions%) () 'variable
+             (make-uvector subtag-simple-vector
+                           (map 'vector #'ccl-symbol 
+                                #(+-2 --2 *-2 /-2 =-2 /=-2 >-2 >=-2 <-2 <=-2 eql length sequence-type
+                                      assq memq logbitp logior-2 logand-2 ash 
+                                      %negate logxor-2 %aref1 %aset1))))
+
     (%defvar (ccl '*keyword-package*) () 'variable *keyword-pkg*)
     (%defvar (ccl'*gc-event-status-bits*) () 'variable 0)
     (%defvar (ccl '%toplevel-catch%) () 'variable (ccl :toplevel))
@@ -64,7 +101,7 @@
       do (ccl-funcall fn))
 
     ;;;; TODO******* So this needs to somehow come in from the compiler, because that's who knowns where it puts it.
-    (%defvar (ccl '*xload-startup-file*) () 'variable (ccl "level-1.cvmsrc"))
+    (%defvar (ccl '*xload-startup-file*) () 'variable (ccl "level-1.bc"))
     (%defvar (ccl '*openmcl-svn-revision*) () 'variable nil) ;; (local-vc-revision) -- SO THIS NEEDS TO BE FROM COMPILE/XLOAD time again
     (%defvar (ccl '*optional-features*) () 'variable nil) ;(mapcar 'ccl-symbol CCL::*BUILD-TIME-OPTIONAL-FEATURES*)
 
@@ -75,13 +112,13 @@
 
     
 
-;;  When running in the VM, cvmsrc files need to be recognized as fasl files,
+;;  When running in the VM, bc files need to be recognized as fasl files,
 ;;  so our {%fasload} function can run and do the load using cvmload.  This is
 ;;  accomplished by loading the cvm backend into the the VM, which makes {fasl-file-p}
-;;  be true for cvmsrc files.
+;;  be true for bc files.
 
 (defun cvmload  (file)
-  (assert (equal (pathname-type file) "cvmsrc"))
+  (assert (equal (pathname-type file) "bc"))
   ;; Should we compile then load?  Only worth if can avoid the compile!
   ;; Which means we need to figure out fasl file conventions in the lisp.
   ;; Worry about it later
@@ -106,7 +143,7 @@
       (retry-load () :report (lambda (s) (format s "CVMLOAD ~s again" file))))))
 
 
-;; a CVMSRC file is a bunch of toplevel calls to these $fasl functions.  The arguments
+;; a BC file is a bunch of toplevel calls to these $fasl functions.  The arguments
 ;; (once evaluated in the host lisp) are BC expressions, can then be bceval'ed to yield
 ;; various native objects, or effect sideffects in the VM...
 
@@ -184,6 +221,7 @@
 (defun $fs-unbound-marker () *unbound-marker*)
 (defun $fs-slot-unbound-marker () *slot-unbound-marker*)
 (defun $fs-illegal-marker () *illegal-marker*)
+(defun $fs-unbound-function () *unbound-function*)
 
 (defun $fs-char (code) (code-char code)) ;; for non-standard chars
 
@@ -250,12 +288,11 @@
     (simple-eval expr)))
 
 ;; like $fasl-funcall but for value, it's used in load-time values.
-;;; I BELIEVE *ALL* calls to this are find-class-cell, maybe its worth breaking out,
-;;; even just to call out to ccl.
-;;; OR conversely, do we really need $fs-istruct-cell?  can we call something in ccl?
+;; called for - register-package-ref, find-builtin-cell, register-type-cell, find-class-cell,
+;; ensure-slot-id, specifier-type  Mainly find-class-cell.  There are also multiple calls with the same
+;; args.  Might avoid that if caught it at at compile time, like $fs-istruct-cell.
 (defun $fs-funcall (fn)
   (fasl-trace "   ~s ~s" '$fs-funcall fn)
-  ;(FORMAT *trace-OUTPUT* "~&$FS-FUNCALL ~s" (ccl-function-bclambda fn))
   (when *deferred-level-0-calls*
     (error "$fs-funcall in level-0 ~s" fn))
   (ccl-funcall fn))
