@@ -7,29 +7,51 @@
 (defun bceval (form)
   (bceval-in-environment nil form))
 
-(def-uvector-subtype :value-cell (ccl-vcell (:constructor %make-ccl-vcell) (:subtag-conser nil)))
+;;; TODO: maybe let vcell-data be #(), and give it a slot for the value, less space, more direct access
+;;;
+;;; vcell refs are a bottleneck, need max speed.
 
-(defun make-vcell (value)
-  (%make-ccl-vcell :subtag subtag-value-cell :data (vector value)))
+(declaim (inline %make-ccl-vcell))
+(def-uvector-subtype :value-cell (ccl-vcell (:constructor %make-ccl-vcell (subtag data value)) (:subtag-conser nil))
+  (value nil))
 
-(defmacro vcell-value (vcell)
-  `(svref (ccl-vcell-data ,vcell) 0))
+(defun-inline make-vcell (value)
+  (declare (optimize (speed 3) (safety 0) (space 0)))
+  (%make-ccl-vcell subtag-value-cell #() value))
+
+(defun-inline vcell-value (vcell)
+  (declare (optimize (speed 3) (safety 0) (space 0)))
+  (ccl-vcell-value (the ccl-vcell vcell)))
+
+(defun-inline set-vcell-value (vcell value)
+  (declare (optimize (speed 3) (safety 0) (space 0)))
+  (setf (ccl-vcell-value (the ccl-vcell vcell)) value))
+
+(defsetf vcell-value set-vcell-value)
 
 (defmethod print-object ((vcell ccl-vcell) stream)
-  (let ((value (uvref vcell 0))
+  (let ((value (ccl-vcell-value vcell))
         (*print-length* (min (or *print-length* 3) 3))
         (*print-level* (min (or *print-level* 2) 2)))
     (format stream "<VCELL [~s]>" value)))
 
-(def-uvector-subtype :call-frame (bcenv (:constructor %make-bcenv) (:subtag-conser nil))
-  (args nil :type list :read-only t) ;; for backtrace
-  (parent nil :type (or bcenv null) :read-only t) ;; for backtrace
+(declaim (inline %make-bcenv))
+(def-uvector-subtype :call-frame (bcenv (:constructor %make-bcenv (subtag parent func args data)) (:subtag-conser nil))
+  (args nil :read-only t)   ;; for backtrace
+  (parent nil :read-only t) ;; for backtrace
   (func nil :read-only t))
 
-(defun make-bcenv (parent-env func args num-locals)
-  (%make-bcenv :parent parent-env :func func :args args :data (make-array num-locals)))
+(defmacro with-bcenv ((num-vars parent-env func args) &rest body)
+  `(let* ((_locals (make-array ,num-vars :initial-element 0))
+          (,*env-var-name* (%make-bcenv subtag-call-frame ,parent-env ,func ,args _locals)))
+     (declare (ignorable ,*env-var-name*)
+              ;; This prevents tail calls...
+              #+no (dynamic-extent _locals ,*env-var-name*))
+     ,@body))
 
-(defun-inline bcenv-locals (bcenv) (gvector-data bcenv))
+(defun-inline bcenv-locals (bcenv)
+  (declare (optimize (speed 3) (safety 0) (space 0)))
+  (gvector-data bcenv))
 
 (defmethod print-object ((env bcenv) stream)
   (print-unreadable-object (env stream :type t :identity nil)
@@ -41,22 +63,31 @@
               (cdr parents)
               (length (bcenv-locals env))))))
 
-(defun bcenv-lvcell (env var-index)
-  (require-type (svref (bcenv-locals env) var-index) 'ccl-vcell))
+(defun-inline bcenv-lvcell (env var-index)
+  (declare (optimize (speed 3) (safety 0) (space 0)))
+  (declare (type bcenv env) (type (unsigned-byte 32) var-index))
+  ;; the vcell slot in locals has 0 if the vcell hasn't been allocated
+  ;; Don't bother checking for that, will hit an exception trying to read from it.
+  (the ccl-vcell ;(or (eql 0) ccl-vcell)
+       (svref (bcenv-locals env) var-index)))
 
-(defun (setf bcenv-lvcell) (vcell env var-index)
-  (setf (svref (bcenv-locals env) var-index) (require-type vcell 'ccl-vcell)))
+(defun-inline set-bcenv-lvcell (env var-index vcell)
+  (declare (optimize (speed 3) (safety 0) (space 0)))
+  (declare (type ccl-vcell vcell) (type bcenv env) (type (unsigned-byte 32) var-index))
+  (setf (svref (bcenv-locals env) var-index) vcell))
+
+(defsetf bcenv-lvcell set-bcenv-lvcell)
+
+(defun-inline %bcenv-lbind (env var-index)
+  (setf (bcenv-lvcell env var-index) (make-vcell nil)))
 
 (defmacro bcenv-lbind (env var-index &optional init)
-  ;; the init might need to reference the vcell (as in labels)
-  ;; so have to bind it first.  *** CHECK IF THIS IS ENOUGH FOR PARALLLEL LABELS.
-  (let ((form `(%bcenv-lbind ,env ,var-index)))
+  ;; the init might need to reference the vcell (as in labels) so have to
+  ;; bind it before eval init.  *** CHECK IF THIS IS ENOUGH FOR PARALLLEL LABELS.
+  (let ((form `(%bcenv-lbind (the bcenv ,env) ,var-index)))
     (when init
       (setq form `(setf (vcell-value ,form) ,init)))
     form))
-
-(defun %bcenv-lbind (env var-index)
-  (setf (bcenv-lvcell env var-index) (make-vcell nil)))
 
 (defun bcenv-lvalue (env var-index)
   (vcell-value (bcenv-lvcell env var-index)))
@@ -81,8 +112,8 @@
     (declare (ignore name))
     (destructuring-bind (inherited req-lvs opt-lvs rest-lv keys-lvs bits) argspecs
       (declare (ignore bits)) 
-      (let ((values-var (make-symbol "VALUES"))
-            (args-var (make-symbol "ARGS"))
+      (let ((values-var 'values)
+            (args-var 'args)
             (rev-inits nil)
             (special-bindings nil))
         (flet ((bind-form (lv value-form)
@@ -98,7 +129,9 @@
             (push `(assert (>= (length ,values-var) ,(+ (length inherited) (length req-lvs)))) rev-inits))
           (loop for lv in inherited
             do (check-type lv fixnum)
-            do (push `(setf (bcenv-lvcell ,*env-var-name* ,lv) (pop ,values-var)) rev-inits))
+            ;; TODO: should typechcek the valeus
+            do (push `(setf (bcenv-lvcell ,*env-var-name* ,lv) (require-type (pop ,values-var) 'ccl-vcell))
+                     rev-inits))
           (loop for lv in req-lvs do (push (bind-form lv `(pop ,values-var)) rev-inits))
           (loop while opt-lvs
             for (opt-lv init supp-lv) = (pop opt-lvs)
@@ -124,8 +157,11 @@
               (when key-inits
                 (push `(let ,(and key-val-var `(,key-val-var)) ,@(nreverse key-inits)) rev-inits)))))
 
-        (push body rev-inits)
-        (setq body `(progn ,@(nreverse rev-inits)))
+        (when rev-inits
+          (setq body `(let ((,values-var ,args-var))
+                        (declare (list ,values-var))
+                        ,@(reverse rev-inits)
+                        ,body)))
         (when special-bindings
           (setq body
                 `(let (,@(loop for sym.var in special-bindings
@@ -137,9 +173,8 @@
                                     (%set-sym-value ',sym ,var)))))))
 
         `(lambda (parent-env self ,args-var)
-           (let ((,*env-var-name* (make-bcenv parent-env self ,args-var ,num-vars))
-                 (,values-var ,args-var))
-             (declare (ignorable ,*env-var-name*))
+           (declare (type (or bcenv null) parent-env))
+           (with-bcenv (,num-vars parent-env self ,args-var)
              ,body))))))
 
 
@@ -232,7 +267,6 @@
   `(make-ccl-closure ,func
                      (list ,@(mapcar (lambda (idx) `(bcenv-lvcell ,*env-var-name* ,idx)) inh))))
 
-;; First vcell-ref is ensure-class-metaclass-and-initargs !!!
 (defbceval $bc-vcell-ref (index) `(bcenv-lvcell ,*env-var-name* ,index))
 
 (defbceval $bc-block (var-index form)
@@ -387,48 +421,83 @@
 
 (defvar *trace-funcall* nil)
 
+(defvar *verbose-auto-compile* nil)
+
+;; There are 1349 functions that are compiled while loading, i.e. they're loaded, and then they're used while loading other files.
+;; Is there any value in compiling them sooner?
 (defun compile-native-function (ccl-name lambda)
-  (multiple-value-bind (res warnings-p failure-p) (compile 'ccl-fn lambda)
-    (when failure-p (error "compilation failed on ~s" ccl-name))
-    (when warnings-p      ;; All the warnings complained of errors in CCL-FN, give a hit of real name
-      (format t "~&in compilation of ~s. ~%" ccl-name))
-    (setf res (fdefinition res))
-    (let* ((native-name (ignore-errors (native ccl-name)))
-           (fn-name (if (consp native-name)
-                      `(ccl-fn ,@native-name)
-                      `(ccl-fn ,(or native-name ccl-name)))))
+  (when (ccl-instance-p ccl-name)
+    (setq ccl-name (instance-slot ccl-name %method.name)))
+  (let* ((native-name (ignore-errors (native ccl-name))) ;; don't know how to nativize symbols in non-std pkgs (e.g. arch::)
+         (fn-name (if (consp native-name)
+                    `(ccl-fn ,@native-name)
+                    `(ccl-fn ,(or native-name ccl-name)))))
+    (when *verbose-auto-compile*
+      (format t "~&Compiling ~s" (or native-name ccl-name)))
+    (multiple-value-bind (res warnings-p failure-p) (compile 'ccl-fn lambda)
+      (when failure-p (error "compilation failed on ~s" ccl-name))
+      (when warnings-p      ;; All the warnings complained of errors in CCL-FN, give a hint of real name
+        (format t "~&in compilation of ~s. ~%" ccl-name))
+      (setf res (fdefinition res))
       #+ccl (ccl::lfun-name res fn-name)
-      #+sbcl (setf (sb-kernel:%fun-name res) fn-name))
-    res))
+      #+sbcl (setf (sb-kernel:%fun-name res) fn-name)
+      res)))
 
 (defun funcall-in-environment (env fn-or-sym &rest args)
   (apply-in-environment env fn-or-sym args))
 
-(defun apply-in-environment (env fn-or-sym args)
-  (when *trace-funcall*
-    (format t "~&APPLY ~s to ~s" fn-or-sym args))
-  (let ((VALS (MULTIPLE-VALUE-LIST 
+(defun-inline do-apply-in-environment (env fn-or-sym args)
+  (declare (optimize (speed 3) (safety 0) (space 0))) ;; this is a bottleneck fn.
   (let* ((fn (ensure-func fn-or-sym))
          (native-fn (ccl-function-native-fn fn))
          (bclambda (ccl-function-bclambda fn)))
-    (assert (or native-fn (consp bclambda)))
+    (declare (type ccl-function fn))
     (cond (native-fn
            (if (eq bclambda 'lap)
-             (apply native-fn args)
-             (funcall native-fn env fn args)))
-          ((ccl-function-name fn)
+             (apply (the function native-fn) args)
+             (funcall (the function native-fn) env fn args)))
+          ;; This comes pretty close to what we want.  When loading, there are 3 fns called total of 1273 times
+          ;; that don't get compiled, I think they are from instance :initform's.  There are about 114 fns that are
+          ;; only called once that get compiled because have lfun bits.
+          ((or (ccl-function-name fn) (not (eql 0 (ccl-function-bits fn))))
            (setq native-fn (compile-native-function (ccl-function-name fn) (bclambda-lambda bclambda)))
            (setf (ccl-function-native-fn fn) native-fn)
            (funcall native-fn env fn args))
-          (t ;; else anonymous fn, probably only called once, don't bother compiling.
-           (eval `(,(bclambda-lambda bclambda) ',env ',fn ',args))))))))
-  (when *trace-funcall* (format t "~&RETURNED from ~s: ~s" fn-or-sym vals))
-  (apply #'values vals)))
+          (t ;; else anonymous fn of no args, probably only called once, don't bother compiling.
+           ;; Note: IN CCL, this will get compiled anyway because it's a lambda application!
+           (eval `(,(bclambda-lambda bclambda) ',env ',fn ',args))))))
 
+
+(defun apply-in-environment (env fn-or-sym args)
+  (if (not *trace-funcall*)
+    (do-apply-in-environment env fn-or-sym args)
+    (locally
+      (declare (notinline do-apply-in-environment))
+      (format t "~&APPLY ~s to ~s" fn-or-sym args)
+      (let ((vals (multiple-value-list (do-apply-in-environment env fn-or-sym args))))
+        (format t "~&RETURNED from ~s: ~s" fn-or-sym vals)
+        (apply #'values vals)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  numbers, chars
 ;;;
+
+(defmacro def-int-op (bc-op fn-name lisp-op ccl-op)
+  `(progn
+     (defbceval ,bc-op (x y) (list ',fn-name x y))
+     (defun ,fn-name (x y)
+       (if (and (typep x 'fixnum)
+                (typep y 'fixnum))
+         (let ((res (,lisp-op x y)))
+           (if (typep res 'ccl-fixnum)
+             res
+             (ccl-bignum res)))
+         (ccl-funcall (ccl ',ccl-op) x y)))))
+
+(def-int-op $bc-ash ccl-ash ash ash)
+(def-int-op $bc-logior2 ccl-logior logior logior-2)
+(def-int-op $bc-logxor2 ccl-logxor logxor logxor)
+(def-int-op $bc-logand2 ccl-logand logand logand-2)
 
 (defmacro def-num-op (bc-op fn-name lisp-op ccl-op)
   `(progn
@@ -440,18 +509,14 @@
            (if (typep res '(or ccl-fixnum single-float))
              res
              (ccl-number res)))
-         ;; probably need to handle double floats here...
-         (ccl-funcall (ccl ',ccl-op) x y)))))
+         (if (and (ccl-double-float-p x) (ccl-double-float-p y))
+           (ccl-number (,lisp-op (the double-float (native-double-float x)) (the double-float (native-double-float y))))
+           (ccl-funcall (ccl ',ccl-op) x y))))))
 
-           
 (def-num-op $bc-add2 ccl-add2 + +-2)
 (def-num-op $bc-sub2 ccl-sub2 - --2)
 (def-num-op $bc-mul2 ccl-mul2 * *-2)
 (def-num-op $bc-div2 ccl-div2 / /-2)
-(def-num-op $bc-ash ccl-ash ash ash)
-(def-num-op $bc-logior2 ccl-logior logior logior-2)
-(def-num-op $bc-logxor2 ccl-logxor logxor logxor)
-(def-num-op $bc-logand2 ccl-logand logand logand-2)
 
 (defbceval $bc-logbitp (x y) `(ccl-logbitp ,x ,y))
 (defun ccl-logbitp (x y)
@@ -513,15 +578,21 @@
          (logior ,word ,(ash -1 16))
          (logand ,word ,(lognot (ash -1 16)))))))
 
-(defbceval $bc-single-float (num) `(coerce ,num 'single-float))
+(defbceval $bc-single-float (num) `(coerce (native ,num) 'single-float))
 
 ;; make compiler do this
 (defbceval $bc-double-float (num) `(ccl-funcall ,(ccl '%double-float) ,num))
 
 
+(defbceval $bc-setf-double-float (result num)
+  (let ((res (gensym)))
+    `(let ((,res ,result)) (lap-%copy-double-float ,num ,res))))
+
+
 ;; Should this do CCL-CHAR-CODE?  are ccl char<>code mappings different?
 (defbceval $bc-char-code (char) `(char-code ,char))
 (defbceval $bc-code-char (code) `(code-char ,code))
+(defbceval $bc-base-char-p (char) `(typep ,char 'base-char))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; sequences
@@ -580,7 +651,7 @@
 (defbceval $bc-aref1 (vec index) `(aref1 ,vec ,index))
 
 (defun aref1 (arr index)
-  (if (eql (typecode arr) subtag-vector-header)
+  (if (eql (ccl-typecode arr) subtag-vector-header)
     (ccl-funcall (ccl '%aref1) arr index)
     (gvref arr index)))
 
@@ -588,7 +659,7 @@
 (defbceval $bc-aset1 (vec index val) `(aset1 ,vec ,index ,val))
 
 (defun aset1 (arr index val)
-  (if (eql (typecode arr) subtag-vector-header)
+  (if (eql (ccl-typecode arr) subtag-vector-header)
     (ccl-funcall (ccl '%aset1) arr index val)
     (gvset arr index val)))
 
@@ -634,7 +705,7 @@
 
 (defbceval $bc-lisptag (val) `(lisptag ,val))
 (defbceval $bc-fulltag (val) `(fulltag ,val))
-(defbceval $bc-typecode (val) `(typecode ,val))
+(defbceval $bc-typecode (val) `(ccl-typecode ,val))
 
 (defbceval $bc-gvector-typecode-p (subtag) `(or (gvector-type-p ,subtag) 0))
 
@@ -759,10 +830,11 @@
 
 (defbceval $bc-ff-call (entry argspecs argvals resultspec)
   (cassert (= (length argspecs) (length argvals)))
-  (let ((sym (and (consp entry)
-                  (eq (car entry) '$bc-symbol-value)
-                  (bc-unquote (cadr entry)))))
-    (check-type sym ccl-symvector))
+  (assert (and (consp entry)
+               (or (and (eq (car entry) '$bc-symbol-value)
+                        (ccl-symvector-p (bc-unquote (cadr entry))))
+                   (and (eq (car entry) '$bc-%reference-external-entry-point)
+                        (istruct-typep (bc-unquote (cadr entry)) (ccl'external-entry-point))))))
   (let* ((form `(cffi:foreign-funcall-pointer (cffi:make-pointer ,entry) ()
                                               ,@(loop for ff-type in argspecs for val in argvals
                                                   collect (setq ff-type (ff-type ff-type))

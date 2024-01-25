@@ -5,21 +5,22 @@
 
 
 ;;;;; For testing only
-#+ccl (progn
-        (defun test-load (&optional recompile)
-          (load-cvm)
-          (ccl::compile-cvm recompile) ;; make sure we have the latest BC
-          (let ((*package* *native-package*)) ;;for debugging, so get this package in break loops
-            ;; TODO: make a link from cvm:ccl; to actual ccl sources so don't have to build in these assumptions
-            (load-ccl (truename (merge-pathnames "../../ccl/" (truename "cvm:"))))))
-        (import 'test-load :cl-user)
-        (import 'test-load :ccl))
+(defun test-load (&optional #+ccl recompile)
+  (load-cvm)
+  #+ccl (ccl::cross-compile-cvm recompile) ;; make sure we have the latest BC
+  (let ((*package* *native-package*)) ;;for debugging, so get this package in break loops
+    ;; TODO: make a link from cvm:ccl; to actual ccl sources so don't have to build in these assumptions
+    (load-ccl (truename (merge-pathnames "../../ccl/" (truename "cvm:")))))
+  (import 'test-load :cl-user)
+  #+ccl (import 'test-load :ccl))
 
 (defparameter *loading-ccl* nil)
 
 (defun cloop ()
   (let ((*package* *native-package*)) ;; for debugging
-    (ccl-funcall *ccl-toplevel-func*)))
+    (loop
+      (restart-case (return (ccl-funcall *ccl-toplevel-func*))
+        (restart-cloop () :report (lambda (s) (format s "Restart CVM toplevel")))))))
 (import 'cloop :cl-user)
 #+ccl (import 'cloop :ccl)
 
@@ -47,13 +48,15 @@
       (setf (sym-value (ccl-symbol '%all-packages-lock%)) lock)
       (setf (sym-value (ccl-symbol '%system-locks%)) (make-uvector subtag-population (vector 0 0 (gvref lock 0)))))
     
-    (cvm-load-level-0 ccl-directory)
+    (setq *CCL-DIRECTORY* (truename ccl-directory)) ;; VM needs this.
+    (let ((*default-pathname-defaults* *ccl-directory*))
+      (cvm-load-level-0)
     ;; Ok, so this sets toplevel function at the end then throws to toplevel...
     ;; The toplevel func basically calls #'toplevel-loop
-    (catch (ccl-symbol :toplevel)
-      (let ((*load-verbose* t))
-        (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*))))))
-  
+      (catch (ccl-symbol :toplevel)
+        (let ((*load-verbose* t))
+          (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*)))))))
+
   (setf (sym-value (ccl'*listener-prompt-format*)) (ccl "~[ccl?~:;~:*ccl ~d >~] "))
   #+ccl (clear-input ccl::*stdin*) ;; for some reason, needed when restarting after errors when using AltConsole 
   (format t "~&CCL-VM LOADED, now can ~s" '(ccl-funcall *ccl-toplevel-func*)))
@@ -62,9 +65,8 @@
 ;; Build things up to the point where in the bootstrapping version, the heap image
 ;; has been loaded and all the initializations in %toplevel-function% in nfasload
 ;; have been executed up.
-(defun cvm-load-level-0 (ccl-directory)
-  (setq *CCL-DIRECTORY* (truename ccl-directory)) ;; VM needs this.
-  (let* ((files (sort (directory (merge-pathnames "cvmsrcs/level-0/*.bc" *ccl-directory*))
+(defun cvm-load-level-0 ()
+  (let* ((files (sort (directory "level-0/**/*.bc") ;; TODO: get rid of "bc"? *.fasl-pathname* not defined til l1-files. use *xload-startup-file*?
                       #'string-lessp :key #'pathname-name))
          (calls (loop for file in files
                   unless (string-equal (pathname-name file) "nfasload")

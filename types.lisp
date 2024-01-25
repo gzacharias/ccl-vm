@@ -10,6 +10,16 @@
 (4) 
 
 |#
+#|
+;;; ***  TODO
+Make a heap vector a subcalss of ccl-uvector,
+and make it have an extra slot for the heap data, and have an empty
+vector in the data slot.  then ccl-uvector-data is always a vector,
+and in cases where might expect a heap vector, do an extra check to decide
+not to use the VECTOR.
+
+Or maybe have like ivectors and gvectors and only ivectors have complex data.
+|#
 
 ;; a simple vector for everything, until there's a good reason not to.
 (defstruct (ccl-uvector (:constructor %raw-make-uvector) (:conc-name uvector-))
@@ -66,17 +76,20 @@
         (constructor nil)
         (subtag-conser nil))
     (loop for option in options
-      do (destructuring-bind (key val) option
-           (ecase key
-             (:include (setq include val))
-             (:constructor (setq constructor val))
-             (:subtag-conser (setq subtag-conser val)))))
+      do (ecase (pop option)
+           (:include (assert (null (cdr option)))
+                     (setq include (car option)))
+           (:constructor (setq constructor option))
+           (:subtag-conser (assert (null (cdr option)))
+                           (setq subtag-conser (car option)))))
     (when (null constructor)
-      (setq constructor (intern (concatenate 'string "MAKE-" (string name)))))
-    (when (eq subtag-conser t) (setq subtag-conser constructor))
+      (setq constructor (list (intern (concatenate 'string "MAKE-" (string name))))))
+    (when (eq subtag-conser t)
+      (assert (null (cdr constructor))) ;; not boa
+      (setq subtag-conser (car constructor)))
     (when (null subtag-conser) (setq subtag-conser 'error))
     `(progn
-       (defstruct (,name (:include ,include) (:constructor ,constructor))
+       (defstruct (,name (:include ,include) (:constructor  ,@constructor))
          ,@slots)
        (push '(,(typekey-subtag typekey) . ,subtag-conser) *subtag-consers*))))
 
@@ -141,12 +154,13 @@
     (report-bad-arg uvec 'gvector))
   uvec)
 
+(defun-inline gvector-data (gvec)
+  (the simple-vector (uvector-data (the ccl-uvector gvec))))
+
 (defun gvref (gvec index) (svref (gvector-data gvec) index))
 (defun gvset (gvec index val) (setf (svref (gvector-data gvec) index) val))
 (defun (setf gvref) (val gvec index) (gvset gvec index val))
 (defun gvsize (gvec) (length (gvector-data gvec)))
-;; Get rid of the typecheck, I think this really slows things downl..
-(defun gvector-data (gvec) (require-type (uvector-data gvec) 'simple-vector))
 
 (defun uvref (uvec index)
   (check-type uvec ccl-uvector)
@@ -187,6 +201,12 @@
   ;; (3) the list of arguments
   (native-fn () :type (or null compiled-function)))
 
+#+GZ
+(progn
+  ;; assume monitor has been modified to make place-function a GF
+  (defmethod mon::place-function ((fn ccl-function)) (ccl-function-native-fn fn))
+  (defmethod (setf mon::place-function) (new (fn ccl-function)) (setf (ccl-function-native-fn fn) new)))
+
 
 (def-uvector-subtype :simple-string (ccl-simple-string (:subtag-conser t)))
 
@@ -226,9 +246,23 @@
   (values (ldb (byte 32 0) mantissa)
           (logior (ash exp 20) (ash mantissa -32) (if neg-p (ash 1 31) 0))))
 
+(defun integer-decode-any-double-float (float)
+  (declare (type double-float float))
+  ;; In sbcl, integer-decode-float errs on infinite and nans.
+  #+sbcl (when (sb-kernel:float-infinity-or-nan-p float)
+           (return-from integer-decode-any-double-float
+             (let ((bits (sb-kernel::double-float-bits float)))
+               (values (logior (ash sb-vm:double-float-hidden-bit 32)
+                               (ldb (byte 52 0) bits))
+                       (- (sb-kernel::dfloat-exponent-from-bits bits)
+                          sb-vm:double-float-bias sb-vm:double-float-digits)
+                       (if (minusp bits) -1 1)))))
+  (integer-decode-float float))
+
+
 (defun ccl-double-float (float &optional result)
   (check-type float double-float)
-  (multiple-value-bind (mantissa exp sign) (integer-decode-float float)
+  (multiple-value-bind (mantissa exp sign) (integer-decode-any-double-float float)
     (multiple-value-bind (loword hiword) (dfloat-encode mantissa exp (< sign 0))
       (if result
         (with-uvector-data (vec result) :error
@@ -239,8 +273,9 @@
 (defun native-double-float (dfloat)
   (check-type dfloat ccl-double-float)
   (multiple-value-bind (mantissa exp neg-p) (dfloat-decode (uvref dfloat 0) (uvref dfloat 1))
-    (let ((float (scale-float (coerce mantissa 'double-float) exp)))
-      (if neg-p (- float) float))))
+    (without-fpu-overflow
+      (let ((float (scale-float (coerce mantissa 'double-float) exp)))
+        (if neg-p (- float) float)))))
 
 (def-uvector-subtype :macptr (ccl-macptr (:constructor %make-ccl-macptr) (:subtag-conser t)))
 
@@ -457,7 +492,7 @@
 (defun lisptag (obj) ;; returns 3 bit typecode
   (logand 7 (fulltag obj)))
 
-(defun typecode (obj)
+(defun ccl-typecode (obj)
   (if (ccl-uvector-p obj)
     (uvector-subtag obj)
     (if (eq obj t)
@@ -508,6 +543,7 @@
   (typecase obj
     ((or ccl-fixnum single-float) obj)
     (integer (ccl-bignum obj))
+    (double-float (ccl-double-float obj))
     (t (error "~s conversion not implemented yet" obj))))
 
 (defun ccl-string (obj)

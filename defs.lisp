@@ -163,6 +163,7 @@
   subtag-unsigned-64-bit-vector
   subtag-double-float-vector)
 
+(declaim (type simple-vector *subtag-ffi-types*))
 (defparameter *subtag-ffi-types*
   (let ((arr (make-array 256 :initial-element nil)))
     (setf (svref arr subtag-bit-vector) :bit)
@@ -244,3 +245,23 @@
     (setq body (cddr arglist) arglist (cadr arglist)))
   #+ccl `(ccl:nfunction ,name (lambda ,arglist ,@body))
   #-ccl `(function (lambda ,arglist ,@body)))
+
+(defmacro without-fpu-overflow (&body body)
+  #+ccl `(let ((overflow (ccl:get-fpu-mode :overflow)))
+           (unwind-protect
+               (progn
+                 (when overflow (ccl:set-fpu-mode :overflow nil))
+                 ,@body)
+             (when overflow (ccl:set-fpu-mode :overflow overflow))))
+  #+sbcl `(let* ((traps (getf (sb-int:get-floating-point-modes) :traps))
+                 (overflow (member :overflow traps)))
+            (unwind-protect
+                (progn
+                  (when overflow
+                    (sb-int:set-floating-point-modes :traps (remove :overflow traps)))
+                  ,@body)
+              (when overflow (sb-int:set-floating-point-modes :traps traps))))
+  #-(or ccl sbcl) `(handler-case  (progn ,@body)
+                    (floating-point-overflow () (error "Need to implement WITHOUT-FPU-OVERFLOW"))))
+
+

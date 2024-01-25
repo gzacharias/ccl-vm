@@ -69,16 +69,11 @@
 (deflapfunction %fasload (namestring)
   (let* ((filename (native-string namestring)))
     (assert (equal (pathname-type filename) "bc"))
-    (when *loading-ccl*
-      ;; While loading up CCL, ignore specified directories, the whole CCL bc is in one directory.
-      (setq filename (merge-pathnames (make-pathname :name (pathname-name filename)
-                                                     :type (pathname-type filename)
-                                                     :directory '(:relative "cvmsrcs"))
-                                      *ccl-directory*)))
     (if (probe-file filename)
       (progn (cvmload filename) t)
       (progn
-        (if *loading-ccl*
+        (if (and *loading-ccl*
+                 #+CCL (member (pathname-name filename) ccl::*modules-not-for-cvm* :test 'string-equal))
           (format t "~&***SKIPPING ~s" filename)
           (error "~s not found" namestring))
         nil))))
@@ -190,7 +185,7 @@
                          (cffi:foreign-string-alloc 
                           ;; This is used only to set the CCL: logical name. It must be a file that exists,
                           ;; inside the ccl directory (if we just use the directory, last component gets stripped)
-                          (namestring (make-pathname :name "cvmsrcs" :defaults *CCL-DIRECTORY*))))))
+                          (namestring (make-pathname :name "level-0" :defaults *CCL-DIRECTORY*))))))
               ((eq name (ccl'argv)) *fake-argv*) ;;; *** TODO
               ;; Known requests... what to do?
               ((or (eq name (ccl 'area-lock))
@@ -341,6 +336,7 @@
 (cffi:defctype ccl-ffi::offset_t :int64)
 
 
+(defconstant CCL-FFI::_SYS_NAMELEN 256)
 (defconstant CCL-FFI::RTLD_GLOBAL 8)
 (defconstant CCL-FFI::RTLD_NOLOAD 16)
 (defconstant CCL-FFI::HOST_BASIC_INFO_COUNT 12)
@@ -458,12 +454,18 @@
   (size ccl-ffi::size_t)
   (result :pointer))
 
+(def-external-call "uname" :int
+  (buf :pointer))
+
 (def-external-call "getcwd" :pointer
   (buf :pointer)
   (size ccl-ffi::size_t))
 
 (def-external-call "isatty" :int
   (fd :int))
+
+(def-external-call "chdir" :int
+  (path :pointer))
 
 (def-external-call "fpathconf" :long
   (fd :int)
@@ -483,9 +485,11 @@
 (def-external-call "unlink" :int
   (path :pointer))
 
+(def-external-call "strerror" :pointer
+  (errno :int))
 
-
-
+;; TODO: see if can make this an alist (or hash table) based on the CCL sym rather than the native sym!
+;;  Only thing is, would need to clear it out any time clear out the package system.
 (defun get-external-fn (sym)
   (let ((name (sym-native-pname sym)))
     (or (cdr (assoc name *known-c-functions-alist* :test 'equal))
@@ -493,16 +497,35 @@
           (cerror "try again" "unknown external fn ~s (~s)" sym (cffi:foreign-symbol-pointer name))
           (get-external-fn sym)))))
 
-;; TODO: Could init all the functions first time this is called, then set *known-c-functions-alist* to nil
 (deflapfunction cvm-external-call (sym &rest args)
   (assert (eq (sym-pkg sym) *ffi-pkg*))
+  #+use-fcell ;; figure out caching later.  Can't put it in the sym fcell, because that contains the macro defn.
   (let ((ffn (sym-fboundp sym)))
+    ;; TODO: Could init all the functions first time this is called, then set *known-c-functions-alist* to nil
+
+    ;; So this defines SYM as a ccl-function whose native function invokes the lisp ccl-ffi::sym fn defined by cffi:defcfun.
+    ;; However, #_sym wants to define a MACRO.
+
+    ;; %EXTERNAL-CALL-EXPANDER, in defered case, expands into (cvm-external-call ',name ,@args)
+
+    ;;; #_-reader, makes a DEF that is lookup of sym in external-function-definitions of the FTD
+    ;;;    if have DEF and macro-function of SYM is #'%external-call-expander, then just returns the sym
+    ;;;   else LOAD-EXTERNAL-FUNCTION.  So basically it's just reading the symbol with thhe side effect of
+    ;;;  making sure the symbol has a macro definition of #'%external-call-expander, so when it's compiled/evaluated,
+    ;;;  
+
+    ;;; load-external-function, looks up def, which in our case is `(deferred-function-definition ,sym)
+    ;;;   records this def for the symbol, but also sets macro-function of SYM to be '%external-call-expander.
+    ;;;
     (unless ffn
       (setf (sym-func sym)
             (setq ffn (make-cloned-fn 'lap
                                       (vector sym (dpb (length args) $lfbits-numreq 0))
                                       (get-external-fn sym)))))
-    (ccl-apply ffn args)))
+    (ccl-apply ffn args))
+  #-use-fcell
+  (let ((fn (get-external-fn sym)))
+    (apply fn args)))
 
 
 (deflapfunction called-for-mv-p () t)
@@ -576,7 +599,7 @@
 
 (deflapfunction %bignum-sign-bits (bignum)
   (let ((high (uvref bignum (1- (uvsize bignum)))))
-    (integer-length (if (logbitp 31 high) (lognot high) high))))
+    (- 32 (integer-length (if (logbitp 31 high) (lognot high) high)))))
 
 (deflapfunction %set-bignum-length (newlen bignum)
   (let ((oldlen (uvsize bignum)))
@@ -601,6 +624,18 @@
             (unless (eql hash native)
               (break "mismatched hash for ~s: us ~s ccl ~s" bignum hash native)))
     hash))
+
+(deflapfunction %digit-logical-shift-right (digit count)
+  (ash digit (- count)))
+
+(deflapfunction %multiply (x y)
+  (let ((res (* x y)))
+    (values (ash res -32) (logand #xFFFFFFFF res))))
+
+(deflapfunction %multiply-and-add3 (x y carry)
+  (let ((res (+ (* x y) carry)))
+    (values (ash res -32) (logand #xFFFFFFFF res))))
+  
 
 (deflapfunction fix-digit-logand (fix big dest)
   (let ((res (logand fix (uvref big 0))))
@@ -665,11 +700,13 @@
 
 (deflapfunction %get-gc-count () 17)
 
-;;;
 ;;; This is basically a big hash table of all the CCL objects that are ever stored in an EQ hash table.
 ;;; **TODO: add a fake address slot to ccl-uvector and get rid of this... Or at least for functions:
-;;; this gets big, because there is an eq hash table of lfuns to lfun names.  
-;; (at end of loading ccl: (CCL-STRUCT . 2) (CCL-SIMPLE-VECTOR . 2) (CCL-PACKAGE . 9) (CONS . 92) (CCL-FUNCTION . 7800)
+;;; this gets big, because there is an eq hash table of lfuns to lfun names (TODO: always leave a slot for lfun
+;;; name, so then don't need so much of this).
+;;;  ***TODO : who's getting addresses of strings?
+;;; CCL-INSTANCE - 4707 CONS - 1787 CCL-SIMPLE-STRING - 2370 CCL-SYMVECTOR - 4260 CCL-FUNCTION - 8169
+
 (defvar-typed *fake-addresses-table* hash-table)
 
 ;; for instance hash, the address is just used as an initial hash, but
@@ -680,14 +717,8 @@
   (cond ((typep obj 'fixnum) obj)
         ((characterp obj) (char-code obj))
         ((typep obj 'single-float)
-         (multiple-value-bind (m exp sign) (integer-decode-float obj)
-           (let ((uexp (+ exp (ash 1 12))))
-             ;; Just put them tegether in any consistent way
-             (check-type m (unsigned-byte 32))
-             (check-type uexp (unsigned-byte 12))
-             (logior m
-                     (ash uexp 32)
-                     (if (eql sign -1) (ash 1 (+ 32 12)) 0)))))
+         ;; Just put them tegether in any consistent way
+         (lap-single-float-bits obj))
         (t (or (gethash obj *fake-addresses-table*)
                (setf (gethash obj *fake-addresses-table*)
                      (+ min-object-address (ash (1+ (hash-table-count *fake-addresses-table*)) 3)))))))
@@ -697,10 +728,8 @@
 (deflapfunction %address-of (obj)
   (lap-strip-tag-to-fixnum obj))
 
-(deflapfunction cvm-ivectorp (obj)
-  (and (ccl-uvector-p obj)
-       (ivector-type-p (uvector-subtag obj))))
-
+(deflapfunction cvm-ivector-typecode-p (subtag)
+  (ivector-type-p subtag))
 
 ;; ccl has fast-mod, why doesn't it have an optimizer to use it??
 ;; sbcl does use this.
@@ -903,7 +932,7 @@
   (check-type handle ccl-macptr)
   (check-type name ccl-macptr)
   (let* ((hval (%macptr-value handle))
-         (name-ptr (cffi:make-pointer (%macptr-value name))))
+         (name-ptr (%macptr-ptr name)))
     (when (eq hval 0) (setq hval RTLD_DEFAULT))
     (let ((val (ff-dlsym hval name-ptr)))
       (when (and (eql val 0) (eql (cffi:mem-ref name-ptr :char 0) (char-code #\_)))
@@ -958,9 +987,10 @@
 
 (deflapfunction closure-function (func) (ccl-closure-function func))
 
+;; Give up and accept symbols (nil/t)
 (deflapfunction %symptr->symbol (symvector)
-  (if (eq symvector *nil-sym*) nil
-    (if (eq symvector *t-sym*) t
+  (if (or (eq symvector *nil-sym*) (null symvector)) nil
+    (if (or (eq symvector *t-sym*) (eq symvector t)) t
       (require-type symvector 'ccl-symvector))))
 
 
@@ -1036,6 +1066,70 @@
   (declare (ignore ignore))
   nil)
 
+(deflapfunction get-fpu-mode (&optional (mode nil mode-p))
+  #+ccl (ccl (if mode-p
+               (ccl:get-fpu-mode (native-symbol mode))
+               (ccl:get-fpu-mode)))
+  #+sbcl (let ((modes (sb-int:get-floating-point-modes)))
+           (if mode-p
+             (let ((modekey (native-symbol mode)))
+               (if (eq modekey :rounding-mode)
+                 (ecase (getf modes :rounding-mode)
+                   (:nearest (ccl :nearest))
+                   (:positive-infinity (ccl :positive))
+                   (:negative-infinity (ccl :negative))
+                   (:zero (ccl :zero)))
+                 (not (null (find (ecase modekey
+                                    ((:overflow :underflow :invalid :inexact) mode)
+                                    (:division-by-zero (ccl :divide-by-zero)))
+                                  (getf modes :traps))))))
+             (let ((traps (getf modes :traps)))
+               (list (ccl :rounding-mode) (ecase (getf modes :rounding-mode)
+                                            (:nearest (ccl :nearest))
+                                            (:positive-infinity (ccl :positive))
+                                            (:negative-infinity (ccl :negative))
+                                            (:zero (ccl :zero)))
+                     (ccl :overflow) (not (null (find :overflow traps)))
+                     (ccl :underflow) (not (null (find :underflow traps)))
+                     (ccl :division-by-zero) (not (null (find :divide-by-zero traps)))
+                     (ccl :invalid) (not (null (find :invalid traps)))
+                     (ccl :inexact) (not (null (find :inexact traps)))))))
+  #-(or ccl sbcl) (error "GET-FPU-MODE not implemented yet on this system"))
+
+(deflapfunction set-fpu-mode (&rest ccl-keys)
+  (let ((keys (native ccl-keys)))
+    #+ccl (apply #'ccl:set-fpu-mode keys)
+    #-ccl
+    (destructuring-bind (&key (rounding-mode :nearest rounding-p)
+                              (overflow t overflow-p)
+                              (underflow t underflow-p)
+                              (division-by-zero t zero-p)
+                              (invalid t invalid-p)
+                              (inexact t inexact-p))
+                        keys
+      #+sbcl (apply #'sb-int:set-floating-point-modes
+                    (nconc
+                     (when rounding-p
+                       (list :rounding-mode (ecase rounding-mode
+                                              (:nearest :nearest)
+                                              (:positive :positive-infinity)
+                                              (:negative :negative-infinity)
+                                              (:zero :zero))))
+                     (when (or overflow-p underflow-p zero-p invalid-p inexact-p)
+                       (let ((traps (getf (sb-int:get-floating-point-modes) :traps)))
+                         (flet ((frob (key val)
+                                  (if val
+                                    (pushnew key traps :test 'eq)
+                                    (setq traps (remove key traps :test 'eq)))))
+                           (when overflow-p (frob :overflow overflow))
+                           (when underflow-p (frob :underflow underflow))
+                           (when zero-p (frob :divide-by-zero division-by-zero))
+                           (when invalid-p (frob :invalid invalid))
+                           (when inexact-p (frob :inexact inexact)))
+                         (list :traps traps)))))
+      #-sbcl (error "SET-FLU-MODE not implemented yet on this  system"))))
+               
+
 (deflapfunction single-float-bits (float)
   (multiple-value-bind (sig exp sign) (integer-decode-float float)
     ;;(assert (< sig (ash 1 24)))
@@ -1053,9 +1147,7 @@
                                (values (logandc2 sig (ash 1 23)) bexp))))
       (check-type mantissa (unsigned-byte 23))
       (check-type bexp (unsigned-byte 8))
-      (let ((val (logior (if (eql sign -1) (ash 1 31) 0) (ash bexp 23) mantissa)))
-        #+ccl (assert (eq val (ccl::single-float-bits float)))
-        val))))
+      (logior (if (eql sign -1) (ash 1 31) 0) (ash bexp 23) mantissa))))
 
 (deflapfunction %short-float-sign (float) (< float 0))
 
@@ -1117,6 +1209,11 @@
   (check-type dfloat ccl-double-float)
   (values (uvref dfloat 1) (uvref dfloat 0)))
 
+(deflapfunction %dfloat-hash (dfloat)
+  (check-type dfloat ccl-double-float)
+  ;; TODO: need to make ccl fixnum, plus shouldn't cons a bignum.
+  (logand most-positive-fixnum (+ (ash (uvref dfloat 1) 32) (uvref dfloat 0))))
+
 (deflapfunction dfloat-significand-zeros (dfloat)
   (check-type dfloat ccl-double-float)
   (let ((hi (ldb (byte 20 0) (uvref dfloat 1))))
@@ -1131,6 +1228,11 @@
 
 (deflapfunction %%scale-dfloat! (dfloat int result)
   (ccl-double-float (scale-float (native-double-float dfloat) int) result))
+
+(deflapfunction %copy-double-float (dfloat result)
+  (setf (uvref result 0) (uvref dfloat 0))
+  (setf (uvref result 1) (uvref dfloat 1))
+  result)
 
 ;;; stuff that was in nfasload.  Perhaps should load nfasload and just isolate the htab stuff?
 (deflapfunction register-package-ref (name)
@@ -1161,11 +1263,11 @@
 
 (deflapfunction %htab-remove-symbol (sym htab index)
   (declare (ignore index))
-  (%htab-rem (%htab-hashkey sym) htab sym))
+  (%htab-rem (%htab-hashkey sym) htab (sym-symvector sym)))
 
 (deflapfunction %htab-add-symbol (sym htab index)
   (declare (ignore index))
-  (%htab-add (%htab-hashkey sym) htab sym))
+  (%htab-add (%htab-hashkey sym) htab (sym-symvector sym)))
 
 (deflapfunction %find-symbol (string len package)
   (check-type string ccl-simple-string)
@@ -1417,6 +1519,15 @@
                          (mapcar #'vmify-ops (cdr expr))))))))
     (vmify-ops (ccl-function-bclambda fn))))
 
+(deflapfunction map-bclambda-immediates (fn thunk)
+  (labels ((scan (expr)
+             (when (consp expr)
+               (if (eq (car expr) '$bc-quote)
+                 (ccl-funcall thunk (bc-unquote expr))
+                 (mapcar #'scan expr)))))
+    (scan (ccl-function-bclambda fn))))
+
+
 (deflapfunction cvm-xdisassemble (fn)
   (let ((bclambda (ccl-function-bclambda fn)))
     (cond ((consp bclambda)
@@ -1433,6 +1544,8 @@
   (apply #'values the-values))
 
 ;;;; Heap vectors
+
+;;; Ok, so this is used for IO.  Really slows things down.
 
 (deflapfunction fudge-heap-pointer (ptr subtag num-elts) ;; aka Make a heap vector
   (check-type subtag (unsigned-byte 8))
@@ -1460,14 +1573,20 @@
 (defun heap-vector-uvref (uvec index)
   (let* ((subtag (uvector-subtag uvec))
          (ptr (uvector-data uvec)))
-    (assert (< index (cffi:mem-ref ptr :uint64 -8)))
-    (cffi:mem-aref ptr (svref *subtag-ffi-types* subtag) index)))
+    ;(cassert (< index (cffi:mem-ref ptr :uint64 -8)))
+    (if (eq subtag subtag-unsigned-8-bit-vector) ;; io buffer
+      (cffi:mem-aref ptr :uint8 index)
+      (cffi:mem-aref ptr (svref *subtag-ffi-types* subtag) index))))
 
 (defun heap-vector-uvset (uvec index val)
   (let* ((subtag (uvector-subtag uvec))
          (ptr (uvector-data uvec)))
-    (assert (< index (cffi:mem-ref ptr :uint64 -8)))
-    (setf (cffi:mem-aref ptr (svref *subtag-ffi-types* subtag) index) val)))
+    ;(cassert (< index (cffi:mem-ref ptr :uint64 -8)))
+    #+gz (unless (eq subtag subtag-unsigned-8-bit-vector)
+           (break "Why uvset this subtag: ~s ~s" subtag (svref *subtag-ffi-types* subtag)))
+    (if (eq subtag subtag-unsigned-8-bit-vector) ;; io buffer
+      (setf (cffi:mem-aref ptr :uint8 index) val)
+      (setf (cffi:mem-aref ptr (svref *subtag-ffi-types* subtag) index) val))))
 
 (defun heap-vector-uvsize (uvec)
   (let* ((ptr (uvector-data uvec)))
@@ -1575,11 +1694,16 @@
 
 (defparameter *native-streams* (vector 
                                 ; input
-                                #+ccl ccl::*stdin*
+                                #+ccl (if (find-package :gui)
+                                        ;; In the ide, *stdin/out* uses AltConsole and sucks.
+                                        *standard-input*
+                                        ccl::*stdin*)
                                 #+sbcl sb-sys:*stdin*
                                 #-(or ccl sbcl) *standard-input*
                                 ; output
-                                #+ccl ccl::*stdout*
+                                #+ccl (if (find-package :gui)
+                                        *standard-output*
+                                        ccl::*stdout*)
                                 #+sbcl sb-sys:*stdout*
                                 #-(or ccl sbcl) *standard-output*
                                 ; error

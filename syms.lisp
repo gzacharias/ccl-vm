@@ -47,7 +47,7 @@
                                      0))) ;; binding index. 0 means global
 
 ;; Early symbols, will get interned once packages are set up.
-(defvar *early-ccl-syms* nil)
+(defparameter *early-ccl-syms* nil)
 
 (defmacro def-early-sym (var pname &rest flags-and-value)
   `(progn
@@ -194,7 +194,10 @@
 (defun %itab-get (hashkey pkg-vec) (%htab-get hashkey (svref pkg-vec pkg.itab)))
 (defun %etab-get (hashkey pkg-vec) (%htab-get hashkey (svref pkg-vec pkg.etab)))
 
+;; TODO: maybe make all these accept all symbols and take care of the conversion to
+;; symvector so nobody at higher level needs to worry about it.
 (defun %htab-add (hashkey htab sym)
+  (check-type sym ccl-symvector)
   (destructuring-bind (uvec count . hash) htab
     (let ((vec (gvector-data uvec)))
       (when (eql count (length vec))
@@ -210,10 +213,11 @@
 (defun %etab-add (hashkey pkg-vec sym) (%htab-add hashkey (svref pkg-vec pkg.etab) sym))
 
 (defun %htab-rem (hashkey htab sym)
+  (check-type sym ccl-symvector)
   (destructuring-bind (uvec count . hash) htab
     ;; The vector is there for iteration, so don't shift its contents around.
     (let* ((vec (gvector-data uvec))
-           (sympos (position (sym-symvector sym) vec)))
+           (sympos (position sym vec)))
       (if (not sympos) ;; shouldn't happen but at least make sure we're consistent
         (assert (not (gethash hashkey hash)))
         (progn
@@ -432,20 +436,19 @@
  ;; Initialize the COMMON-LISP package..  Assume our host is compliant and just copy theirs.
   ;; Has to happen before we start loading files with references to CL symbols in ccl package,
   ;; else get they created as ccl symbols.
-  (do-external-symbols (native-sym :common-lisp)
-    (let ((pname (ccl-string (symbol-name native-sym))))
-      (assert (not (sym-in-pkg-p pname *cl-pkg*)))
-      (add-sym-to-pkg (let ((early (assoc pname *early-ccl-syms* :test #'uvector-equal :key #'sym-pname)))
-                        (or (when early
-                              (setq *early-ccl-syms* (remove early *early-ccl-syms*))
-                              (car early))
-                            (make-ccl-symvector pname)))
-                      *cl-pkg*
-                      t)))
-  (loop while *early-ccl-syms*
-    for symvec = (car (pop *early-ccl-syms*))
-    do (add-sym-to-pkg symvec *ccl-pkg*)
-    finally (makunbound '*early-ccl-syms*))
+  (let ((early-syms *early-ccl-syms*))
+    (do-external-symbols (native-sym :common-lisp)
+      (let ((pname (ccl-string (symbol-name native-sym))))
+        (assert (not (sym-in-pkg-p pname *cl-pkg*)))
+        (add-sym-to-pkg (let ((early (assoc pname early-syms :test #'uvector-equal :key #'sym-pname)))
+                          (or (when early
+                                (setq early-syms (remove early early-syms))
+                                (car early))
+                              (make-ccl-symvector pname)))
+                        *cl-pkg*
+                        t)))
+    (loop for cell in early-syms
+      do (add-sym-to-pkg (car cell) *ccl-pkg*)))
 
   ;; So there is this weird thing:
   ;;  In ccl-export-syms, we export a bunch of symbols from CCL.
