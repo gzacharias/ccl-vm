@@ -343,6 +343,7 @@
 (defconstant CCL-FFI::KERN_SUCCESS 0)
 (defconstant CCL-FFI::HOST_BASIC_INFO 1)
 (defconstant CCL-FFI::_SC_CLK_TCK 3)
+(defconstant CCL-FFI::_SC_PAGESIZE 29)
 (defconstant CCL-FFI::PATH_MAX 1024)
 (defconstant CCL-FFI::S_IFMT  #xF000)
 (defconstant CCL-FFI::S_IFDIR #x4000)
