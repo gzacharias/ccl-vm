@@ -368,6 +368,7 @@
 (defconstant CCL-FFI::EEXIST 17)
 (defconstant CCL-FFI::ENFILE 23)
 (defconstant CCL-FFI::EMFILE 24)
+(defconstant CCL-FFI::ERANGE 34)
 (defconstant CCL-FFI::EAGAIN 35)
 (defconstant CCL-FFI::EADDRINUSE 48)
 (defconstant CCL-FFI::EADDRNOTAVAIL 49)
@@ -912,10 +913,15 @@
 (defun kernel-import-lisp-ftruncate (fd length)
   (ff-ftruncate fd length))
 
+#-(or darwin freebsd linux)
+(error "%GET-ERRNO: need a way to read errno on this OS")
 
-(cffi:defcvar ("errno" *ff-errno*) :int)
-
-(deflapfunction %get-errno () (- *ff-errno*))
+#+(or darwin freebsd linux)
+(deflapfunction %get-errno ()
+  (- (cffi:mem-ref (cffi:foreign-funcall #+(or darwin freebsd) "__error"
+                                         #+linux "__errno_location"
+                                         :pointer)
+                   :int)))
 
 (deflapfunction %get-spin-lock (spin) spin)
 (deflapfunction %lock-gc-lock () 0)
@@ -1601,7 +1607,6 @@
   nil)
 
 (deflapfunction %copy-ivector-to-ivector (src src-byte-offset dest dest-byte-offset nbytes)
-  (assert (not (eq src dest))) ;; not needed
   (let* ((utype (svref *subtag-ffi-types* (uvector-subtag src))))
     (assert (and utype (eq utype (svref *subtag-ffi-types* (uvector-subtag dest))))) ;; not needed
     ;; Reverse engineer the offsets
@@ -1622,8 +1627,12 @@
          (assert (= (logand #b111 src-offset) (logand #b111 dest-offset) (logand #b111 count) 0))
          (setq count (ash count -3) src-offset (ash src-offset -3) dest-offset (ash dest-offset -3)))
         (t (error "Cant copy ~s vectors" (subtag-typekey (uvector-subtag src)))))
-      (loop for si upfrom src-offset for di upfrom dest-offset for n from 0 below count
-        do (setf (uvref dest di) (uvref src si))))
+      (if (and (eq src dest) (> dest-offset src-offset))
+        ;; overlapping copy within one vector, moving up: copy backwards
+        (loop for n from (1- count) downto 0
+          do (setf (uvref dest (+ dest-offset n)) (uvref src (+ src-offset n))))
+        (loop for si upfrom src-offset for di upfrom dest-offset for n from 0 below count
+          do (setf (uvref dest di) (uvref src si)))))
     dest))
 
 
