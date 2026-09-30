@@ -14,7 +14,8 @@
   (setf (logical-pathname-translations "cvm") (ignore-errors (logical-pathname-translations "cvm")))
   (setf (logical-pathname-translations "cvm")
         `((,(make-pathname :host "cvm" :directory '(:absolute :wild-inferiors) :name :wild :type :wild :version :wild)
-           ,(make-pathname :name :wild :type :wild :version :wild :defaults dir)))))
+           ,(make-pathname :directory (append (pathname-directory dir) '(:wild-inferiors))
+                           :name :wild :type :wild :version :wild :defaults dir)))))
 
 (require "QUICKLISP" "~/quicklisp/setup.lisp")
 (unless (find-package "CFFI")
