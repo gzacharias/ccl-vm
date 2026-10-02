@@ -201,13 +201,6 @@ Or maybe have like ivectors and gvectors and only ivectors have complex data.
   ;; (3) the list of arguments
   (native-fn () :type (or null compiled-function)))
 
-#+GZ
-(progn
-  ;; assume monitor has been modified to make place-function a GF
-  (defmethod mon::place-function ((fn ccl-function)) (ccl-function-native-fn fn))
-  (defmethod (setf mon::place-function) (new (fn ccl-function)) (setf (ccl-function-native-fn fn) new)))
-
-
 (def-uvector-subtype :simple-string (ccl-simple-string (:subtag-conser t)))
 
 (defun native-string (str)

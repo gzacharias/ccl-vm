@@ -3,17 +3,6 @@
 ;; Maybe should load nfasload and just comment out %fasload?  I think there is a mechanism for
 ;; different fasload backends already!
 
-
-;;;;; For testing only
-(defun test-load (&optional #+ccl recompile)
-  (load-cvm)
-  #+ccl (ccl::cross-compile-cvm recompile) ;; make sure we have the latest BC
-  (let ((*package* *native-package*)) ;;for debugging, so get this package in break loops
-    ;; TODO: make a link from cvm:ccl; to actual ccl sources so don't have to build in these assumptions
-    (load-ccl (truename (merge-pathnames "../../ccl/" (truename "cvm:")))))
-  (import 'test-load :cl-user)
-  #+ccl (import 'test-load :ccl))
-
 (defparameter *loading-ccl* nil)
 
 (defun cloop ()
@@ -21,8 +10,6 @@
     (loop
       (restart-case (return (ccl-funcall *ccl-toplevel-func*))
         (restart-cloop () :report (lambda (s) (format s "Restart CVM toplevel")))))))
-(import 'cloop :cl-user)
-#+ccl (import 'cloop :ccl)
 
 ;;; ~5 mins
 (defun load-ccl (&optional (ccl-directory "CCL:"))
