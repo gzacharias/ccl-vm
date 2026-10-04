@@ -4,7 +4,9 @@
 
 (let* ((path (or #+allegro excl:*source-pathname*
                  #+lispworks dspec:*source-pathname*
-                 #+sbcl (or *compile-file-truename* *load-truename*)
+                 #+sbcl (let* ((location (sb-c:source-location))
+                               (namestring (and location (sb-c:definition-source-location-namestring location))))
+                          (and namestring (pathname namestring)))
                  #+ccl ccl:*loading-file-source-file*
                  #+abcl (extensions:source-pathname)
                  *load-pathname*))
