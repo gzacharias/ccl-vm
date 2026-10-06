@@ -1,5 +1,3 @@
-(defpackage :ccl-vm (:use :cl))
-
 (in-package :ccl-vm)
 
 (defparameter *env-var-name* 'env)

@@ -35,7 +35,9 @@
                 #:if-let
                 #:starts-with-subseq
                 #:ends-with-subseq
-                #:set-equal))
+                #:set-equal)
+  (:export #:load-ccl
+	   #:cloop))
 
 (in-package :ccl-vm)
 
