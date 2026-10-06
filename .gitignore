@@ -1,0 +1,14 @@
+*.o
+*.*fsl
+*~.*
+*.fasl
+
+.DS_Store
+
+# emacs detritus
+*~
+\#*\#
+.\#*
+
+/.gdb*
+
