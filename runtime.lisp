@@ -172,20 +172,14 @@
         (t (warn "Trying to get native value of ~s" name)
            73)))
 
-(defvar *fake-heap-image-name* nil)
+(defvar *fake-heap-image-name* nil) ;; initialized by load-ccl
 (defvar *fake-argv* (cffi:foreign-alloc :pointer :count 0 :null-terminated-p t))
 
 (deflapfunction cvm-get-kernel-global-ptr (name dest)
   (check-type name ccl-symvector)
   (check-type dest ccl-macptr)
   (setf (%macptr-value dest)
-        (cond ((eq name (ccl'image-name))
-               (or *fake-heap-image-name*
-                   (setq *fake-heap-image-name*
-                         (cffi:foreign-string-alloc 
-                          ;; This is used only to set the CCL: logical name. It must be a file that exists,
-                          ;; inside the ccl directory (if we just use the directory, last component gets stripped)
-                          (namestring (make-pathname :name "level-0" :defaults *CCL-DIRECTORY*))))))
+        (cond ((eq name (ccl'image-name)) *fake-heap-image-name*)
               ((eq name (ccl'argv)) *fake-argv*) ;;; *** TODO
               ;; Known requests... what to do?
               ((or (eq name (ccl 'area-lock))

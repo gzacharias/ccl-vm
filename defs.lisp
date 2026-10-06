@@ -1,7 +1,5 @@
 (in-package :ccl-vm)
 
-(defvar *CCL-DIRECTORY*)
-
 (defmacro defun-inline (name args &body body)
   `(progn
      (declaim (inline ,name))

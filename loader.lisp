@@ -12,7 +12,14 @@
         (restart-cloop () :report (lambda (s) (format s "Restart CVM toplevel")))))))
 
 ;;; ~5 mins
-(defun load-ccl (&optional (ccl-directory "CCL:"))
+(defun load-ccl (bc-bundle &key ccl-directory)
+  (unless (probe-file (merge-pathnames "level-1.bc" bc-bundle))
+    (error "~a doesn't look like a ccl bc directory, it has no level-1.bc" bc-bundle))
+  (when (and ccl-directory (not (probe-file (merge-pathnames "level-1" ccl-directory))))
+    (error "~a doesn't look like ccl directory" ccl-directory))
+
+  (setq bc-bundle (truename bc-bundle))
+
   (let ((*loading-ccl* t))
     (init-packages)
     (init-lap-functions)
@@ -29,20 +36,34 @@
                                                   #+allegro :weak-keys #+allegro t
                                                   #-(or ccl sbcl lispworks allegro) (error "Need to make a weak hash table")))
     
+    ;; This is only used to set the CCL: logical name when not found by getenv. It must be a file that exists at toplevel
+    ;; in the ccl directory.
+    (when *fake-heap-image-name* ;; clear from previous runs
+      (cffi:foreign-string-free *fake-heap-image-name*))
+    (setq *fake-heap-image-name*
+          (cffi:foreign-string-alloc 
+           (namestring (make-pathname :name "level-1" :type "bc" :defaults bc-bundle))))
+
     (setf (sym-value (ccl-symbol '*gf-proto*)) (sym-func (ccl 'gag-any-arg)))
     
     (let ((lock (make-rw-lock-obj)))
       (setf (sym-value (ccl-symbol '%all-packages-lock%)) lock)
       (setf (sym-value (ccl-symbol '%system-locks%)) (make-uvector subtag-population (vector 0 0 (gvref lock 0)))))
     
-    (setq *CCL-DIRECTORY* (truename ccl-directory)) ;; VM needs this.
-    (let ((*default-pathname-defaults* *ccl-directory*))
+
+    (let ((*default-pathname-defaults* bc-bundle))
       (cvm-load-level-0)
     ;; Ok, so this sets toplevel function at the end then throws to toplevel...
     ;; The toplevel func basically calls #'toplevel-loop
       (catch (ccl-symbol :toplevel)
         (let ((*load-verbose* t))
           (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*)))))))
+
+  ;; The boot is over.  Stop redirecting REQUIRE's to the bc bundle.
+  (ccl-funcall (sym-func (ccl 'forget-boot-search-path)))
+  ;; Set alternate "ccl:" if requested
+  (when ccl-directory
+    (ccl-funcall (sym-func (ccl 'set-ccl-directory)) (ccl (namestring ccl-directory))))
 
   (setf (sym-value (ccl'*listener-prompt-format*)) (ccl "~[ccl?~:;~:*ccl ~d >~] "))
   #+ccl (clear-input ccl::*stdin*) ;; for some reason, needed when restarting after errors when using AltConsole 
