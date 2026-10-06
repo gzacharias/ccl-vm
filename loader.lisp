@@ -63,7 +63,9 @@
   (ccl-funcall (sym-func (ccl 'forget-boot-search-path)))
   ;; Set alternate "ccl:" if requested
   (when ccl-directory
-    (ccl-funcall (sym-func (ccl 'set-ccl-directory)) (ccl (namestring ccl-directory))))
+    (ccl-funcall (sym-func (ccl 'set-ccl-directory)) 
+                 (ccl (namestring (translate-logical-pathname ccl-directory)))))
+
 
   (setf (sym-value (ccl'*listener-prompt-format*)) (ccl "~[ccl?~:;~:*ccl ~d >~] "))
   #+ccl (clear-input ccl::*stdin*) ;; for some reason, needed when restarting after errors when using AltConsole 
