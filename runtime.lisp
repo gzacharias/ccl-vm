@@ -66,6 +66,9 @@
   (let ((*package* *native-package*))
     (apply #'break (native-string str) args)))
 
+;; Modules the bc-compiler does not compile (*modules-not-for-cvm* in its compile-ccl.lisp).
+(defparameter *modules-not-in-bundle* '("edit-callers" "cover" "leaks" "core-files" "dominance" "backtrace-lds"))
+
 (deflapfunction %fasload (namestring)
   (let* ((filename (native-string namestring)))
     (assert (equal (pathname-type filename) "bc"))
@@ -73,7 +76,7 @@
       (progn (cvmload filename) t)
       (progn
         (if (and *loading-ccl*
-                 #+CCL (member (pathname-name filename) ccl::*modules-not-for-cvm* :test 'string-equal))
+                 (member (pathname-name filename) *modules-not-in-bundle* :test 'string-equal))
           (format t "~&***SKIPPING ~s" filename)
           (error "~s not found" namestring))
         nil))))
