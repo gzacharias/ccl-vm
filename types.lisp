@@ -267,7 +267,9 @@ Or maybe have like ivectors and gvectors and only ivectors have complex data.
   (check-type dfloat ccl-double-float)
   (multiple-value-bind (mantissa exp neg-p) (dfloat-decode (uvref dfloat 0) (uvref dfloat 1))
     (without-fpu-overflow
-      (let ((float (scale-float (coerce mantissa 'double-float) exp)))
+      ;; scale-float in a stock ccl 1.13 signals an overflow (whatever the fpu mode) when making an infinity.
+      (let ((float (handler-case (scale-float (coerce mantissa 'double-float) exp)
+                     #+ccl (floating-point-overflow () ccl::double-float-positive-infinity))))
         (if neg-p (- float) float)))))
 
 (def-uvector-subtype :macptr (ccl-macptr (:constructor %make-ccl-macptr) (:subtag-conser t)))
