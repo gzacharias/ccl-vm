@@ -67,7 +67,7 @@ The foreign function support is kludgy and limited to darwin, so it can only run
 
 The VM is single-threaded.  The primary goal of this project is to be able to run the CCL compiler in another lisp, so threads are not a priority.
 
-On my machine, rebuild-ccl takes about 80 minutes in ccl, about 7 minutes in sbcl.
+On my machine, rebuild-ccl takes about half an hour in ccl, about 6 minutes in sbcl.
 
 
 ## How it works
