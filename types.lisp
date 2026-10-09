@@ -24,7 +24,9 @@ Or maybe have like ivectors and gvectors and only ivectors have complex data.
 ;; a simple vector for everything, until there's a good reason not to.
 (defstruct (ccl-uvector (:constructor %raw-make-uvector) (:conc-name uvector-))
   (subtag 0 :type (unsigned-byte 8) :read-only t)
-  (data #() :type (or simple-vector cffi:foreign-pointer)))
+  (data #() :type (or simple-vector cffi:foreign-pointer))
+  ;; The fake address (see STRIP-TAG-TO-FIXNUM), assigned the first time CCL asks for it.  0 means not assigned yet.
+  (address 0 :type fixnum))
 
 (deftype ccl-object () `(or ccl-fixnum boolean list character single-float
                             ccl-uvector

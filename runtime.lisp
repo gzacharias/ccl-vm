@@ -699,18 +699,25 @@
 
 (deflapfunction %get-gc-count () 17)
 
-;;; This is basically a big hash table of all the CCL objects that are ever stored in an EQ hash table.
-;;; **TODO: add a fake address slot to ccl-uvector and get rid of this... Or at least for functions:
-;;; this gets big, because there is an eq hash table of lfuns to lfun names (TODO: always leave a slot for lfun
-;;; name, so then don't need so much of this).
-;;;  ***TODO : who's getting addresses of strings?
-;;; CCL-INSTANCE - 4707 CONS - 1787 CCL-SIMPLE-STRING - 2370 CCL-SYMVECTOR - 4260 CCL-FUNCTION - 8169
-
+;;; Sometimes ccl wants the address of an object (e.g. for EQ hash table), so we give it
+;;; one.  Uvectors keep theirs in a slot. A table holds the addresses of the objects that
+;;; have nowhere to keep one (conses).
 (defvar-typed *fake-addresses-table* hash-table)
 
 ;; for instance hash, the address is just used as an initial hash, but
 ;; must not conflict with max-class-ordinal, so put things above there
 (defconstant min-object-address (ash 1 20))
+
+(defvar-typed *next-fake-address* fixnum)
+
+(defun init-fake-addresses ()
+  (setq *next-fake-address* min-object-address)
+  (setq *fake-addresses-table* (make-hash-table :test 'eq :size 200
+                                                #+ccl :weak #+ccl t
+                                                #+sbcl :weakness #+sbcl :key
+                                                #+lispworks :weak-kind #+lispworks :key
+                                                #+allegro :weak-keys #+allegro t
+                                                #-(or ccl sbcl lispworks allegro) (error "Need to make a weak hash table"))))
 
 (deflapfunction strip-tag-to-fixnum (obj)
   (cond ((typep obj 'fixnum) obj)
@@ -718,9 +725,13 @@
         ((typep obj 'single-float)
          ;; Just put them tegether in any consistent way
          (lap-single-float-bits obj))
+        ((ccl-uvector-p obj)
+         (let ((address (uvector-address obj)))
+           (if (eql address 0)
+             (setf (uvector-address obj) (incf *next-fake-address* 8))
+             address)))
         (t (or (gethash obj *fake-addresses-table*)
-               (setf (gethash obj *fake-addresses-table*)
-                     (+ min-object-address (ash (1+ (hash-table-count *fake-addresses-table*)) 3)))))))
+               (setf (gethash obj *fake-addresses-table*) (incf *next-fake-address* 8))))))
 
 
 ;; This is needed for %print-unreadable-object, unfortunately.

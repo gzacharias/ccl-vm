@@ -28,14 +28,9 @@
     ;;;  a way for kernel to call us.   It seems to be only called for signals.
     (%set-sym-value (ccl-symbol 'xcmain) 'callback-for-cmain?)
     (%set-sym-value (ccl-symbol '%xerr-disp) 'callback-for-%err-disp?)
-    ;; Table for any time ccl wants the address of something.
-    (setq *fake-addresses-table* (make-hash-table :test 'eq
-                                                  #+ccl :weak #+ccl t
-                                                  #+sbcl :weakness #+sbcl :key
-                                                  #+lispworks :weak-kind #+lispworks :key
-                                                  #+allegro :weak-keys #+allegro t
-                                                  #-(or ccl sbcl lispworks allegro) (error "Need to make a weak hash table")))
-    
+
+    (init-fake-addresses)
+
     ;; This is only used to set the CCL: logical name when not found by getenv. It must be a file that exists at toplevel
     ;; in the ccl directory.
     (when *fake-heap-image-name* ;; clear from previous runs
