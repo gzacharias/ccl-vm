@@ -713,7 +713,7 @@
 (defun init-fake-addresses ()
   (setq *next-fake-address* min-object-address)
   (setq *fake-addresses-table* (make-hash-table :test 'eq :size 200
-                                                #+ccl :weak #+ccl t
+                                                #+ccl :weak #+ccl t #+ccl :lock-free #+ccl nil
                                                 #+sbcl :weakness #+sbcl :key
                                                 #+lispworks :weak-kind #+lispworks :key
                                                 #+allegro :weak-keys #+allegro t
