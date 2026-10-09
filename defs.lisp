@@ -223,8 +223,13 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; random utils
 
-(defun-inline require-type (obj type)
-  (if (typep obj type) obj (require-type-out-of-line obj type)))
+;; This doesn't work as an inline function because then ccl doesn't notice that the type is constant,
+;;  leading to around 1.7 times slower rebuild-ccl.
+(defmacro require-type (obj type &environment env)
+  (if (constantp type env)
+    (let ((object (gensym "OBJ")))
+      `(let ((,object ,obj)) (if (typep ,object ,type) ,object (require-type-out-of-line ,object ,type))))
+    `(require-type-out-of-line ,obj ,type)))
 
 (defun require-type-out-of-line (obj type)
   (assert (typep obj type) (obj))
