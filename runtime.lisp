@@ -901,6 +901,11 @@
 (defun kernel-import-lisp-gettimeofday (ptimeval ptz)
   (ff-gettimeofday (%macptr-ptr ptimeval) (%macptr-ptr ptz)))
 
+(defvar *monotonic-time-base* (get-internal-real-time)) ;; start from when this file was loaded.
+(defun kernel-import-lisp-monotonic-time (ns-per-unit)
+  (values (floor (* (- (get-internal-real-time) *monotonic-time-base*) 1000000000)
+                 (* internal-time-units-per-second ns-per-unit))))
+
 (defun kernel-import-lisp-realpath (nameptr resultptr)
   (unless (cffi:null-pointer-p (%macptr-ptr resultptr))
     (setf (cffi:mem-ref (%macptr-ptr resultptr) :uint8 0) 0))
