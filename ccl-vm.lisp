@@ -11,7 +11,7 @@
                  #+abcl (extensions:source-pathname)
                  *load-pathname*))
        (dir (truename (make-pathname :name nil :type nil :version nil :defaults path))))
-  ;; sbcl sure goes out if its way to make logical pathnames hard to use! The host has to be defined in order to
+  ;; sbcl sure goes out of its way to make logical pathnames hard to use! The host has to be defined in order to
   ;; (make-pathname :host), and the host is required in the pathname given to logical-pathname-translations!
   (setf (logical-pathname-translations "cvm") (ignore-errors (logical-pathname-translations "cvm")))
   (setf (logical-pathname-translations "cvm")

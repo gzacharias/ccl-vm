@@ -350,6 +350,11 @@ Or maybe have like ivectors and gvectors and only ivectors have complex data.
       (unbound-slot-error slot-vec index)
       val)))
 
+;; Let ccl handle it, like the unbound-slot trap does in a native ccl: it finds the instance and the slot's name from
+;; the slot vector and the index, and signals the real UNBOUND-SLOT condition (with its use-value and store-value restarts).
+(defun unbound-slot-error (slot-vec index)
+  (ccl-funcall (ccl '%slot-unbound-trap) slot-vec index nil))
+
 (defun instance-class (obj)
   (check-type obj ccl-instance)
   (let ((wrapper (gvref obj instance.class-wrapper)))
