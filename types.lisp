@@ -246,12 +246,13 @@ Or maybe have like ivectors and gvectors and only ivectors have complex data.
   ;; In sbcl, integer-decode-float errs on infinite and nans.
   #+sbcl (when (sb-kernel:float-infinity-or-nan-p float)
            (return-from integer-decode-any-double-float
-             (let ((bits (sb-kernel::double-float-bits float)))
-               (values (logior (ash sb-vm:double-float-hidden-bit 32)
-                               (ldb (byte 52 0) bits))
-                       (- (sb-kernel::dfloat-exponent-from-bits bits)
-                          sb-vm:double-float-bias sb-vm:double-float-digits)
-                       (if (minusp bits) -1 1)))))
+             ;; Done by hand from the two words of the float (what sbcl's own internals for this have been renamed
+             ;; several times): 1 sign bit, an 11 bit exponent, and a 52 bit fraction with an implicit leading 1.
+             (let ((high (sb-kernel:double-float-high-bits float))
+                   (low (sb-kernel:double-float-low-bits float)))
+               (values (logior (ash 1 52) (ash (ldb (byte 20 0) high) 32) low)
+                       (- (ldb (byte 11 20) high) 1075)
+                       (if (minusp high) -1 1)))))
   (integer-decode-float float))
 
 
