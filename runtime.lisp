@@ -1165,8 +1165,8 @@
                                  (assert (zerop (ldb (byte shift 0) sig)))
                                  (values (ash sig (- shift)) 0))
                                (values (logandc2 sig (ash 1 23)) bexp))))
+      (declare (type (mod 255) bexp))
       (check-type mantissa (unsigned-byte 23))
-      (check-type bexp (unsigned-byte 8))
       (logior (if (eql sign -1) (ash 1 31) 0) (ash bexp 23) mantissa))))
 
 (deflapfunction %short-float-sign (float) (< float 0))
