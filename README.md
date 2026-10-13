@@ -8,8 +8,8 @@ The .bc files are text files containing lisp forms, and can be checked into sour
 
 ## Requirements
 
-* A host Common Lisp running on macOS. Tested with ccl (1.12.2 and 1.13) and sbcl.
-* Quicklisp is assumed to be installed in `~/quicklisp/`
+* A host Common Lisp running on macOS. Tested with ccl (1.12.2 and 1.13) and sbcl (2.6.9)
+* ASDF and Quicklisp.
 * The .bc files bundle:  you can either download a prebuilt bundle from this repository's
 [Releases](https://github.com/gzacharias/ccl-vm/releases), or build one yourself by following
  the instructions in [bc-compiler README](https://github.com/gzacharias/ccl/blob/bc-compiler/README.md).
@@ -26,7 +26,11 @@ tar -xzf ccl-bc.tar.gz        # makes ./ccl-bc/
 
 Then, in your Lisp:
 ```
-(load #P"/path/to/ccl-vm/ccl-vm.lisp")               ; load ccl-vm.
+(load "~/quicklisp/setup.lisp")                      ; or whatever you do to install quicklisp
+;; Tell ASDF about ccl-vm.  You can do so by putting a link to it in `~/common-lisp/` or `~/quicklisp/local-projects/`,
+;; or you can add it to the registry at runtime like this:
+(pushnew #P"/path/to/ccl-vm/" asdf:*central-registry* :test #'equal)   ; tells ASDF about ccl-vm
+(asdf:load-system "ccl-vm")                          ; load ccl-vm.
 (ccl-vm:load-ccl #P"/path/to/ccl-bc/")               ; loads the bc bundle into the vm
 (ccl-vm:cloop)                                       ; start the ccl listener in the vm
 ```

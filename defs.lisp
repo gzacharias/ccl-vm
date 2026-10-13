@@ -1,5 +1,10 @@
 (in-package :ccl-vm)
 
+;; This is used to tell the ccl pretty printer to print selected $bc-xxx forms like the lisp forms they stand for.
+#+ccl
+(defun ccl-pprint-def (op ccl-printer)
+  (ccl::set-pprint-dispatch+ `(cons (member ,op)) (symbol-function ccl-printer) '(0) ccl::*IPD*))
+
 (defmacro defun-inline (name args &body body)
   `(progn
      (declaim (inline ,name))

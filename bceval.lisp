@@ -267,6 +267,7 @@
 
 (defbceval $bc-vcell-ref (index) `(bcenv-lvcell ,*env-var-name* ,index))
 
+#+ccl (ccl-pprint-def '$bc-block 'ccl::block-like)
 (defbceval $bc-block (var-index form)
   (check-type var-index fixnum)
   (let ((tag (gensym "BLOCK-TAG")))
@@ -285,16 +286,19 @@
 
 (defbceval $bc-symbol-function (sym) `(sym-func ,sym))
 
+#+ccl (ccl-pprint-def '$bc-progn 'ccl::progn-print)
 (defbceval $bc-progn (&rest forms) `(progn ,@forms))
 (defbceval $bc-prog1 (valform &rest forms) `(prog1 ,valform ,@forms))
 (defbceval $bc-catch (tag form) `(catch ,tag ,form))
 (defbceval $bc-throw (target value) `(throw ,target ,value))
 (defbceval $bc-unwind-protect (protected cleanup) `(unwind-protect ,protected ,cleanup))
+#+ccl (ccl-pprint-def '$bc-if 'ccl::block-like)
 (defbceval $bc-if (test yes no) `(if ,test ,yes ,no))
 (defbceval $bc-or (&rest args) `(or ,@args))
 (defbceval $bc-values (&rest values) `(values ,@values))
 (defbceval $bc-nth-value (n form) `(nth-value ,n ,form))
 
+#+ccl (ccl-pprint-def '$bc-progv 'ccl::defvar-like)
 (defbceval $bc-progv (symbols values body)
   (let ((old-vals (gensym "OLD-VALS"))
         (syms (gensym "SYMS")))
@@ -383,6 +387,7 @@
 
 
 
+#+ccl (ccl-pprint-def '$bc-let* 'ccl::let-print)
 (defbceval $bc-let* (bindings body)
   `(progn
      ,@(loop for (var-index init) in bindings
@@ -411,6 +416,7 @@
   (cassert args)
   `(apply-in-environment ,*env-var-name* ,fn (list* ,@args)))
 
+#+ccl (ccl-pprint-def '$bc-funcall 'ccl::block-like)
 (defbceval $bc-funcall (fn &rest args)
   `(apply-in-environment ,*env-var-name* ,fn (list ,@args)))
 
