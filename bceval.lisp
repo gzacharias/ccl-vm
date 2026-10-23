@@ -855,11 +855,14 @@
 
 #+NOTYET (defbceval $bc-debug-trap (arg) (bdbg (list 'debug-trap arg)))
 
-(defconstant $XWRONGTYPE 157)
-
 (defbceval $bc-signalerr (err-no &rest args)
-  (if (equal err-no `($bc-quote ,$xwrongtype))
-    (destructuring-bind (thing type) args
-      `(error "In CCL, value ~s of not of the expected type ~s" ,thing ,type))
-    `(error "In CCL, error #~s with args ~s" ',err-no (list ,@args))))
+  `(ccl-signalerr ,err-no ,@args))
+
+(defun ccl-signalerr (err-no &rest args)
+  (let ((err-disp (ccl '%err-disp)))
+    (cond ((sym-fboundp err-disp)
+           (apply #'ccl-funcall err-disp err-no args))
+          ;; error early in the boot sequence, before level-1 has defined %err-disp, all we can do is
+          ;; signal an error in the host.
+          (t (error "In CCL, error #~s with args ~s" err-no args)))))
 
