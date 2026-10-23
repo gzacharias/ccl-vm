@@ -268,7 +268,11 @@
                   (when overflow
                     (sb-int:set-floating-point-modes :traps (remove :overflow traps)))
                   ,@body)
-              (when overflow (sb-int:set-floating-point-modes :traps traps))))
+              ;; Clear the accrued exceptions when re-enabling the traps: SBCL copies them (the SSE sticky flags set by a
+              ;; masked overflow in the body) into the x87 status word, which makes an unmasked x87 exception pending.
+              ;; That is delivered later, at any x87 instruction or signal, as a bogus generic FLOATING-POINT-EXCEPTION.
+              ;; https://bugs.launchpad.net/sbcl/+bug/2171963   Remove :accrued-exceptions when that is fixed.
+              (when overflow (sb-int:set-floating-point-modes :traps traps :accrued-exceptions nil))))
   #-(or ccl sbcl) `(handler-case  (progn ,@body)
                     (floating-point-overflow () (error "Need to implement WITHOUT-FPU-OVERFLOW"))))
 

@@ -1146,7 +1146,8 @@
                            (when zero-p (frob :divide-by-zero division-by-zero))
                            (when invalid-p (frob :invalid invalid))
                            (when inexact-p (frob :inexact inexact)))
-                         (list :traps traps)))))
+                         ;; :accrued-exceptions nil: see WITHOUT-FPU-OVERFLOW (https://bugs.launchpad.net/sbcl/+bug/2171963)
+                         (list :traps traps :accrued-exceptions nil)))))
       #-sbcl (error "SET-FLU-MODE not implemented yet on this  system"))))
                
 
