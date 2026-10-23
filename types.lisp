@@ -275,6 +275,9 @@ Or maybe have like ivectors and gvectors and only ivectors have complex data.
                      #+ccl (floating-point-overflow () ccl::double-float-positive-infinity))))
         (if neg-p (- float) float)))))
 
+(def-uvector-subtype :ratio (ccl-ratio (:subtag-conser t)))
+
+
 (def-uvector-subtype :macptr (ccl-macptr (:constructor %make-ccl-macptr) (:subtag-conser t)))
 
 (defconstant macptr.address 0) ;; this contains raw native (unsigned-byte 64).

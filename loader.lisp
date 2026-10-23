@@ -64,7 +64,7 @@
 
   (setf (sym-value (ccl'*listener-prompt-format*)) (ccl "~[ccl?~:;~:*ccl ~d >~] "))
   #+ccl (clear-input ccl::*stdin*) ;; for some reason, needed when restarting after errors when using AltConsole 
-  (format t "~&CCL-VM LOADED, now can ~s" '(ccl-funcall *ccl-toplevel-func*)))
+  (format t "~&CCL-VM LOADED, now can ~s" '(cloop)))
 
 
 ;; Build things up to the point where in the bootstrapping version, the heap image
