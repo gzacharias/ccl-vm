@@ -500,7 +500,7 @@
 
 (def-int-op $bc-ash ccl-ash ash ash)
 (def-int-op $bc-logior2 ccl-logior logior logior-2)
-(def-int-op $bc-logxor2 ccl-logxor logxor logxor)
+(def-int-op $bc-logxor2 ccl-logxor logxor logxor-2)
 (def-int-op $bc-logand2 ccl-logand logand logand-2)
 
 (defmacro def-num-op (bc-op fn-name lisp-op ccl-op)
