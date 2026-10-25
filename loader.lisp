@@ -3,13 +3,26 @@
 ;; Maybe should load nfasload and just comment out %fasload?  I think there is a mechanism for
 ;; different fasload backends already!
 
+(defmacro with-ccl-compiling-setup (flags &body body)
+  (assert (null flags))
+  #-sbcl `(progn ,@body)
+  ;; we're loading machine-generated code and the user doesn't need to be informed every time the compiler
+  ;; eliminates some unreachable code.
+  #+sbcl `(handler-bind ((sb-ext:compiler-note (lambda (c)
+						 (when (search "deleting unreachable code" (princ-to-string c))
+						   (muffle-warning c)))))
+	    ,@body))
+
+
 (defparameter *loading-ccl* nil)
 
 (defun cloop ()
   (let ((*package* *native-package*)) ;; for debugging
-    (loop
-      (restart-case (return (ccl-funcall *ccl-toplevel-func*))
-        (restart-cloop () :report (lambda (s) (format s "Restart CVM toplevel")))))))
+    (with-ccl-compiling-setup ()
+      (loop
+        (restart-case (return (ccl-funcall *ccl-toplevel-func*))
+          (restart-cloop () :report (lambda (s) (format s "Restart CVM toplevel"))))))))
+
 
 ;;; ~5 mins
 (defun load-ccl (bc-bundle &key ccl-directory)
@@ -45,20 +58,20 @@
       (setf (sym-value (ccl-symbol '%all-packages-lock%)) lock)
       (setf (sym-value (ccl-symbol '%system-locks%)) (make-uvector subtag-population (vector 0 0 (gvref lock 0)))))
     
-
-    (let ((*default-pathname-defaults* bc-bundle))
-      (cvm-load-level-0)
-    ;; Ok, so this sets toplevel function at the end then throws to toplevel...
-    ;; The toplevel func basically calls #'toplevel-loop
-      (catch (ccl-symbol :toplevel)
-        (let ((*load-verbose* t))
-          (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*)))))))
+    (with-ccl-compiling-setup ()
+      (let ((*default-pathname-defaults* bc-bundle))
+        (cvm-load-level-0)
+        ;; Ok, so this sets toplevel function at the end then throws to toplevel...
+        ;; The toplevel func basically calls #'toplevel-loop
+        (catch (ccl-symbol :toplevel)
+          (let ((*load-verbose* t))
+            (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*))))))))
 
   ;; The boot is over.  Stop redirecting REQUIRE's to the bc bundle.
   (ccl-funcall (sym-func (ccl 'forget-boot-search-path)))
   ;; Set alternate "ccl:" if requested
   (when ccl-directory
-    (ccl-funcall (sym-func (ccl 'set-ccl-directory)) 
+    (ccl-funcall (ccl 'set-ccl-directory) 
                  (ccl (namestring (translate-logical-pathname ccl-directory)))))
 
 
