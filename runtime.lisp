@@ -640,14 +640,42 @@
   (let ((res (+ (* x y) carry)))
     (values (ash res -32) (logand #xFFFFFFFF res))))
   
+;; Get the low 2 digits of a bignum as a 64 bit value
+(defun bignum-low-64 (big)
+  (let* ((low (uvref big 0))
+         (high (if (> (uvsize big) 1)
+                 (uvref big 1)
+                 (if (logbitp 31 low) u32-mask 0)))
+         (word (logior (ash high 32) low)))
+    (if (logbitp 63 word) (- word (ash 1 64)) word)))
 
+;; store a 64 bit value as the low 2 digits of a bignum
+(defun fix-digit-result (res dest)
+  (if (null dest)
+    res
+    (progn
+      (setf (uvref dest 0) (ldb (byte 32 0) res)
+            (uvref dest 1) (ldb (byte 32 32) res))
+      dest)))
+
+;;; These operate on the low 64 bits of BIG and store the result into DEST.
 (deflapfunction fix-digit-logand (fix big dest)
-  (let ((res (logand fix (uvref big 0))))
-    (if (null dest)
-      res
-      (progn
-        (setf (uvref dest 0) res)
-        dest))))
+  (fix-digit-result (logand fix (bignum-low-64 big)) dest))
+
+(deflapfunction fix-digit-logandc2 (fix big dest)
+  (fix-digit-result (logandc2 fix (bignum-low-64 big)) dest))
+
+(deflapfunction fix-digit-logandc1 (fix big dest)
+  (fix-digit-result (logandc1 fix (bignum-low-64 big)) dest))
+
+;;; C[i] = A[i] op B[i] for the first N digits.
+(deflapfunction %bignum-logand (n a b c)
+  (dotimes (i n c)
+    (setf (uvref c i) (logand (uvref a i) (uvref b i)))))
+
+(deflapfunction %bignum-logior (n a b c)
+  (dotimes (i n c)
+    (setf (uvref c i) (logior (uvref a i) (uvref b i)))))
 
 (deflapfunction %multiply-and-add-fixnum-loop (len64 bignum fixnum result)
   (declare (ignore len64))
