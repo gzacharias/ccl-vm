@@ -205,6 +205,23 @@
   (ccl-ffi::tv_sec :int64)
   (ccl-ffi::tv_usec :int32))
 
+;;; Interface database records (lib/foreign-types.lisp), for db-io lookups when
+;;; cross-compiling for a target that has an interface database.
+(cffi:defcstruct ccl-ffi::cdb-datum
+  (ccl-ffi::data :pointer)
+  (ccl-ffi::size :uint32))
+
+(cffi:defcunion ccl-ffi::dbm-constant-value
+  (ccl-ffi::s32 :int32)
+  (ccl-ffi::u32 :uint32)
+  (ccl-ffi::single-float :float)
+  (ccl-ffi::double-float :double))
+
+(cffi:defcstruct ccl-ffi::dbm-constant
+  (ccl-ffi::class :uint32)
+  (ccl-ffi::pad :uint32)
+  (ccl-ffi::value (:union ccl-ffi::dbm-constant-value)))
+
 (cffi:defcstruct ccl-ffi::host_basic_info
   (ccl-ffi::max_cpus :int32)
   (ccl-ffi::avail_cpus :int32)
