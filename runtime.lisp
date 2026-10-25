@@ -1620,9 +1620,65 @@
   (declare (ignore thing))
   nil)
 
+(defun integer-ivector-element-bytes (utype)
+  (ecase utype ((:int8 :uint8) 1) ((:int16 :uint16) 2) ((:int32 :uint32) 4) ((:int64 :uint64) 8)))
+
+(defun integer-ivector-signed-p (utype)
+  (member utype '(:int8 :int16 :int32 :int64)))
+
+;;; Byte-level access to integer ivectors, as native code would see the bytes
+;;; (little-endian).
+(defun ivector-byte (ivector utype byte-index)
+  (multiple-value-bind (index byte) (floor byte-index (integer-ivector-element-bytes utype))
+    (ldb (byte 8 (* 8 byte)) (the integer (uvref ivector index)))))
+
+(defun set-ivector-byte (ivector utype byte-index value)
+  (let* ((size (integer-ivector-element-bytes utype))
+         (bits (* 8 size)))
+    (multiple-value-bind (index byte) (floor byte-index size)
+      (let* ((new (dpb value (byte 8 (* 8 byte))
+                       (ldb (byte bits 0) (the integer (uvref ivector index))))))
+        (setf (uvref ivector index)
+              (if (and (integer-ivector-signed-p utype) (logbitp (1- bits) new))
+                (- new (ash 1 bits))
+                new))))))
+
+(defun copy-ivector-bytes (src src-utype src-byte-offset dest dest-utype dest-byte-offset nbytes)
+  ;; Copy between integer ivectors with different element sizes, a byte at a time.  The
+  ;; fasl writer does this, e.g. to put an (unsigned-byte 32) vector into its
+  ;; (unsigned-byte 8) buffer.
+  (dotimes (n nbytes dest)
+    (set-ivector-byte dest dest-utype (+ dest-byte-offset n)
+                      (ivector-byte src src-utype (+ src-byte-offset n)))))
+
+(defun integer-ivector-utype (ivector)
+  (let* ((utype (svref *subtag-ffi-types* (uvector-subtag ivector))))
+    (integer-ivector-element-bytes utype)   ; signal an error if it isn't one
+    utype))
+
+;;; The native fasl reader (nfasload, used by xfasload when cross-compiling) reads into
+;;; a foreign buffer and copies from there.
+(deflapfunction %copy-ptr-to-ivector (src src-byte-offset dest dest-byte-offset nbytes)
+  (let* ((ptr (%macptr-ptr src))
+         (utype (integer-ivector-utype dest)))
+    (dotimes (n nbytes dest)
+      (set-ivector-byte dest utype (+ dest-byte-offset n)
+                        (cffi:mem-ref ptr :uint8 (+ src-byte-offset n))))))
+
+(deflapfunction %copy-ivector-to-ptr (src src-byte-offset dest dest-byte-offset nbytes)
+  (let* ((ptr (%macptr-ptr dest))
+         (utype (integer-ivector-utype src)))
+    (dotimes (n nbytes dest)
+      (setf (cffi:mem-ref ptr :uint8 (+ dest-byte-offset n))
+            (ivector-byte src utype (+ src-byte-offset n))))))
+
 (deflapfunction %copy-ivector-to-ivector (src src-byte-offset dest dest-byte-offset nbytes)
-  (let* ((utype (svref *subtag-ffi-types* (uvector-subtag src))))
-    (assert (and utype (eq utype (svref *subtag-ffi-types* (uvector-subtag dest))))) ;; not needed
+  (let* ((utype (svref *subtag-ffi-types* (uvector-subtag src)))
+         (dest-utype (svref *subtag-ffi-types* (uvector-subtag dest))))
+    (assert (and utype dest-utype))
+    (unless (eq utype dest-utype)
+      (return-from lap-%copy-ivector-to-ivector
+        (copy-ivector-bytes src utype src-byte-offset dest dest-utype dest-byte-offset nbytes)))
     ;; Reverse engineer the offsets
     (let* ((src-offset src-byte-offset)
            (dest-offset dest-byte-offset)
