@@ -349,6 +349,7 @@
 (defconstant CCL-FFI::S_IFIFO #x1000)
 (defconstant CCL-FFI::SEEK_CUR 1)
 (defconstant CCL-FFI::SEEK_SET 0)
+(defconstant CCL-FFI::SEEK_END 2)
 (defconstant CCL-FFI::O_RDONLY 0)
 (defconstant CCL-FFI::O_WRONLY 1)
 (defconstant CCL-FFI::O_RDWR 2)
@@ -427,6 +428,10 @@
   (size ccl-ffi::size_t))
 
 (def-external-call "getdtablesize" :int)
+
+(def-external-call "nanosleep" :int
+  (request :pointer)
+  (remaining :pointer))
 
 (def-external-call "mach_host_self" ccl-ffi::host_t)
 
@@ -787,6 +792,11 @@
 
 (defun kernel-import-free (ptr)
   (cffi:foreign-free (%macptr-ptr ptr)))
+
+(deflapfunction gc ()
+  #+sbcl (sb-ext:gc :full t)
+  #+ccl (ccl:gc)
+  nil)
 
 (defun kernel-import-fd-setsize-bytes () ;;;; **** TODO 
   ;; sizeof(fd_set)
