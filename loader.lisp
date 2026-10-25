@@ -97,7 +97,7 @@
     (%defvar (ccl-symbol '*package*) () 'variable *ccl-pkg*)
     (%defvar (ccl-symbol '*ccl-package*) () 'variable *ccl-pkg*)
     (%defvar (ccl '*common-lisp-package*) () 'variable *cl-pkg*)
-    (%defconstant (ccl '%unbound-function%) *unbound-function*)
+    (%defvar (ccl '%unbound-function%) () 'variable *unbound-function*)
     (%defvar (ccl '%builtin-functions%) () 'variable
              (make-uvector subtag-simple-vector
                            (map 'vector #'ccl-symbol 
