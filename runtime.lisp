@@ -205,6 +205,25 @@
   (ccl-ffi::tv_sec :int64)
   (ccl-ffi::tv_usec :int32))
 
+;;; For TIME (lib/time.lisp) and %%RUSAGE
+(cffi:defcstruct ccl-ffi::rusage
+  (ccl-ffi::ru_utime (:struct ccl-ffi::timeval))
+  (ccl-ffi::ru_stime (:struct ccl-ffi::timeval))
+  (ccl-ffi::ru_maxrss :long)
+  (ccl-ffi::ru_ixrss :long)
+  (ccl-ffi::ru_idrss :long)
+  (ccl-ffi::ru_isrss :long)
+  (ccl-ffi::ru_minflt :long)
+  (ccl-ffi::ru_majflt :long)
+  (ccl-ffi::ru_nswap :long)
+  (ccl-ffi::ru_inblock :long)
+  (ccl-ffi::ru_oublock :long)
+  (ccl-ffi::ru_msgsnd :long)
+  (ccl-ffi::ru_msgrcv :long)
+  (ccl-ffi::ru_nsignals :long)
+  (ccl-ffi::ru_nvcsw :long)
+  (ccl-ffi::ru_nivcsw :long))
+
 ;;; Interface database records (lib/foreign-types.lisp), for db-io lookups when
 ;;; cross-compiling for a target that has an interface database.
 (cffi:defcstruct ccl-ffi::cdb-datum
@@ -372,6 +391,7 @@
 (defconstant CCL-FFI::O_RDWR 2)
 (defconstant CCL-FFI::O_CREAT #x200)
 (defconstant CCL-FFI::O_EXCL #x800)
+(defconstant CCL-FFI::RUSAGE_SELF 0)
 (defconstant CCL-FFI::EAI_AGAIN 2)
 (defconstant CCL-FFI::EAI_FAIL 4)
 (defconstant CCL-FFI::EAI_NONAME 8)
@@ -444,6 +464,11 @@
   (val :int)
   (size ccl-ffi::size_t))
 
+(def-external-call "memmove" :pointer
+  (dest :pointer)
+  (src :pointer)
+  (size ccl-ffi::size_t))
+
 (def-external-call "getdtablesize" :int)
 
 (def-external-call "nanosleep" :int
@@ -512,6 +537,10 @@
 
 (def-external-call "strerror" :pointer
   (errno :int))
+
+(def-external-call "getrusage" :int
+  (who :int)
+  (usage :pointer))
 
 ;; TODO: see if can make this an alist (or hash table) based on the CCL sym rather than the native sym!
 ;;  Only thing is, would need to clear it out any time clear out the package system.
@@ -752,6 +781,10 @@
 
 
 (deflapfunction %get-gc-count () 17)
+
+;; Used by TIME.  The VM doesn't count CCL allocation, and TIME leaves out the
+;; "bytes of memory allocated" line when it's 0.
+(deflapfunction total-bytes-allocated () 0)
 
 ;;; Sometimes ccl wants the address of an object (e.g. for EQ hash table), so we give it
 ;;; one.  Uvectors keep theirs in a slot. A table holds the addresses of the objects that
@@ -1320,6 +1353,12 @@
 
 (deflapfunction %%scale-dfloat! (dfloat int result)
   (ccl-double-float (scale-float (native-double-float dfloat) int) result))
+
+(deflapfunction %truncate-double-float->fixnum (dfloat)
+  (values (truncate (native-double-float dfloat))))
+
+(deflapfunction %fixnum-gcd (x y)
+  (ccl-number (gcd x y)))
 
 (deflapfunction %copy-double-float (dfloat result)
   (setf (uvref result 0) (uvref dfloat 0))
