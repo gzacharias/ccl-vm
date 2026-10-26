@@ -1858,16 +1858,17 @@
   (interactive-stream-p (aref *native-streams* which)))
 
 (deflapfunction native-stream-read-char (which)
-  (read-char (aref *native-streams* which) nil :eof))
+  (or (read-char (aref *native-streams* which) nil nil) (ccl :eof)))
 
-(defmethod native-stream-read-byte (which)
-  (read-byte (aref *native-streams* which) nil :eof))
+(deflapfunction native-stream-read-byte (which)
+  (or (read-byte (aref *native-streams* which) nil nil) (ccl :eof)))
 
 (deflapfunction native-stream-unread-char (which char)
   (unread-char char (aref *native-streams* which)))
 
 (deflapfunction native-stream-read-char-no-hang (which)
-  (read-char-no-hang (aref *native-streams* which) nil :eof))
+  (let ((char (read-char-no-hang (aref *native-streams* which) nil :eof)))
+    (if (eq char :eof) (ccl :eof) char)))
 
 (deflapfunction native-stream-write-char (which c)
   (write-char c (aref *native-streams* which)))
