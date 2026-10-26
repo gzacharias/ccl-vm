@@ -506,6 +506,10 @@
 (def-external-call "unlink" :int
   (path :pointer))
 
+(def-external-call "mkdir" :int
+  (path :pointer)
+  (mode :uint16))   ; mode_t
+
 (def-external-call "strerror" :pointer
   (errno :int))
 
