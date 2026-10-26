@@ -124,7 +124,9 @@
                         (setq ,old-var (%sym-value ',var))
                         (%set-sym-value ',var ,value-form))))))
           (when (or inherited req-lvs)
-            (push `(assert (>= (length ,values-var) ,(+ (length inherited) (length req-lvs)))) rev-inits))
+            (push `(unless (>= (length ,values-var) ,(+ (length inherited) (length req-lvs)))
+                     (ccl-signalerr 154 (cons self ,args-var))) ; $xtoofew
+                  rev-inits))
           (loop for lv in inherited
             do (check-type lv fixnum)
             ;; TODO: should typechcek the valeus
@@ -137,7 +139,9 @@
             when supp-lv do (push (bind-form supp-lv `(not (null ,values-var))) rev-inits)
             do (push `(setq ,values-var (cdr ,values-var)) rev-inits))
           (when (and (not rest-lv) (not keys-lvs))
-            (push `(assert (null ,values-var)) rev-inits))
+            (push `(when ,values-var
+                     (ccl-signalerr 155 (cons self ,args-var))) ; $xtoomany
+                  rev-inits))
           (when rest-lv
             (push (bind-form rest-lv `(copy-list ,values-var)) rev-inits))
           (when keys-lvs
