@@ -842,6 +842,18 @@
 (defun kernel-import-free (ptr)
   (cffi:foreign-free (%macptr-ptr ptr)))
 
+(deflapfunction cvm-run-program (args merge-error capture-output)
+  (handler-case
+      (multiple-value-bind (output error-output exit-code)
+          (uiop:run-program (mapcar #'native-string args)
+                            :output (and capture-output :string)
+                            :error-output (and merge-error capture-output :output)
+                            :ignore-error-status t)
+        (declare (ignore error-output))
+        (values exit-code (and output (ccl-string output))))
+    (error (c)
+      (values nil (ccl-string (princ-to-string c))))))
+
 (deflapfunction gc ()
   #+sbcl (sb-ext:gc :full t)
   #+ccl (ccl:gc)
