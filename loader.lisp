@@ -17,6 +17,8 @@
 (defparameter *loading-ccl* nil)
 
 (defun cloop ()
+  (unless *ccl-toplevel-func*
+    (error "CCL isn't loaded.  Call ~s first." '(load-ccl "bundle-dir")))
   (let ((*package* *native-package*)) ;; for debugging
     (with-ccl-compiling-setup ()
       (loop
