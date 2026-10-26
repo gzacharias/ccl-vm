@@ -519,6 +519,7 @@ Or maybe have like ivectors and gvectors and only ivectors have complex data.
              ((eq subtag subtag-double-float) (native-double-float ccl-obj))
              ((eq subtag subtag-macptr) (%macptr-ptr ccl-obj))
              ((eq subtag subtag-bignum) (native-integer ccl-obj))
+             ((eq subtag subtag-ratio) (/ (native (uvref ccl-obj 0)) (native (uvref ccl-obj 1))))
              ((eq subtag subtag-symvector) (native-symbol ccl-obj))
              ((eq subtag subtag-simple-vector) (gvector-data ccl-obj))
              (t (error "Don't know how to nativize ~s" ccl-obj)))))
@@ -544,12 +545,13 @@ Or maybe have like ivectors and gvectors and only ivectors have complex data.
 
 
 
-
 (defun ccl-number (obj)
   (typecase obj
     ((or ccl-fixnum single-float) obj)
     (integer (ccl-bignum obj))
     (double-float (ccl-double-float obj))
+    (ratio (make-ccl-ratio :subtag subtag-ratio
+                           :data (vector (ccl-number (numerator obj)) (ccl-number (denominator obj)))))
     (t (error "~s conversion not implemented yet" obj))))
 
 (defun ccl-string (obj)
