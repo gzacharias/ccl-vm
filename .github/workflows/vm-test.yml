@@ -1,0 +1,200 @@
+# Builds bc-compiler natively, compiles the bc bundle, runs ccl-tests on the native build,
+# then boots the bundle in ccl-vm on SBCL (Intel and Apple Silicon macs).
+# A push to the ci branch tests gzacharias/ccl's ci branch and runs every step, including the VM
+# rebuild and cross-compile.  (Run workflow only shows up once this file is on the default branch.)
+name: Build bundle and test VM
+
+on:
+  workflow_dispatch:
+    inputs:
+      ccl_ref:
+        description: "gzacharias/ccl branch, tag or commit to build"
+        default: bc-compiler
+      vm_rebuild:
+        description: "Also run (rebuild-ccl :clean t) inside the VM"
+        type: boolean
+        default: false
+      cross_compile:
+        description: "Also cross-compile darwinx8664 from the VM and boot the result (Intel only)"
+        type: boolean
+        default: false
+  push:
+    branches: [ci]
+
+permissions:
+  contents: read
+
+env:
+  CCL_REF: ${{ inputs.ccl_ref || 'ci' }}
+  RELEASE_URL: https://github.com/Clozure/ccl/releases/download/v1.13/darwinx86.tar.gz
+
+jobs:
+  bundle:
+    runs-on: macos-15-intel
+    steps:
+      - name: Check out bc-compiler
+        uses: actions/checkout@v4
+        with:
+          repository: gzacharias/ccl
+          ref: ${{ env.CCL_REF }}
+          path: ccl
+
+      - name: Install 1.13 bootstrapping binaries
+        run: |
+          curl -sSfL -O $RELEASE_URL
+          tar -xzf darwinx86.tar.gz -C ccl
+
+      - name: First rebuild (with kernel)
+        working-directory: ccl
+        run: |
+          ./dx86cl64 -n -b <<'EOF'
+          (let ((*warn-if-redefine-kernel* nil)) (load "ccl:lib;compile-ccl.lisp"))
+          (rebuild-ccl :clean t :kernel t)
+          (format t "~&BUILD1-DONE~%")
+          (quit)
+          EOF
+
+      - name: Second rebuild (should be warning-free)
+        working-directory: ccl
+        run: |
+          ./dx86cl64 -n -b > ../build2.log 2>&1 <<'EOF'
+          (rebuild-ccl :clean t)
+          (format t "~&BUILD2-DONE~%")
+          (quit)
+          EOF
+          cat ../build2.log
+          grep -q BUILD2-DONE ../build2.log
+          if grep -q ';Compiler warnings' ../build2.log; then echo "::error::second rebuild has warnings"; exit 1; fi
+
+      - name: Compile the bc bundle
+        working-directory: ccl
+        run: |
+          ./dx86cl64 -n -b <<'EOF'
+          (ccl:bc-compile-ccl :force t :output "ccl:ccl-bc;")
+          (format t "~&BC-DONE~%")
+          (quit)
+          EOF
+          echo "bc files: $(find ccl-bc -name '*.bc' | wc -l)"
+          tar -czf ../ccl-bc.tar.gz ccl-bc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ccl-bc
+          path: ccl-bc.tar.gz
+
+      - name: Check out ccl-tests
+        uses: actions/checkout@v4
+        with:
+          repository: Clozure/ccl-tests
+          path: ccl-tests
+
+      - name: Run ccl-tests on the native build
+        working-directory: ccl-tests
+        run: make CCL=../ccl/dx86cl64
+
+  vm:
+    needs: bundle
+    if: ${{ !cancelled() }}          # run even if only ccl-tests failed in the bundle job
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            experimental: false
+          - runner: macos-latest       # Apple Silicon; the VM hasn't been tried there yet
+            experimental: true
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.experimental }}
+    env:
+      SBCL_OPTS: --dynamic-space-size 12GB --control-stack-size 512MB --noinform --non-interactive
+    steps:
+      - name: Check out ccl-vm
+        uses: actions/checkout@v4
+        with:
+          path: ccl-vm
+
+      - name: Check out ccl sources (for rebuild and cross-compile)
+        if: ${{ github.event_name == 'push' || inputs.vm_rebuild || inputs.cross_compile }}
+        uses: actions/checkout@v4
+        with:
+          repository: gzacharias/ccl
+          ref: ${{ env.CCL_REF }}
+          path: ccl
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ccl-bc
+
+      - name: Install SBCL and Quicklisp
+        run: |
+          brew install sbcl
+          sbcl --version
+          curl -sSfL -O https://beta.quicklisp.org/quicklisp.lisp
+          sbcl --noinform --non-interactive --load quicklisp.lisp \
+               --eval '(quicklisp-quickstart:install)' \
+               --eval '(ql:quickload (list "cffi" "alexandria"))'
+          tar -xzf ccl-bc.tar.gz
+          # common prologue for the steps below
+          cat > vm-load.lisp <<EOF
+          (setf (sb-ext:bytes-consed-between-gcs) (* 1024 1024 1024))
+          (load "~/quicklisp/setup.lisp")
+          (pushnew #p"$PWD/ccl-vm/" asdf:*central-registry* :test (function equal))
+          (asdf:load-system "ccl-vm")
+          EOF
+
+      - name: Boot the bundle in the VM
+        run: |
+          sbcl $SBCL_OPTS --load vm-load.lisp \
+               --eval "(ccl-vm:load-ccl #p\"$PWD/ccl-bc/\")" \
+               --eval '(ccl-vm:cloop)' > smoke.log 2>&1 <<'EOF'
+          (defun fact (n) (if (< n 2) 1 (* n (fact (1- n)))))
+          (format t "~&VM-SMOKE ~a ~a~%" (fact 20) (funcall (compile nil '(lambda (l) (reduce #'+ l))) '(1 2 3)))
+          EOF
+          cat smoke.log
+          grep -q 'VM-SMOKE 2432902008176640000 6' smoke.log
+
+      - name: rebuild-ccl inside the VM
+        if: ${{ github.event_name == 'push' || inputs.vm_rebuild }}
+        run: |
+          rsync -a --exclude .git ccl/ vmtree/
+          sbcl $SBCL_OPTS --load vm-load.lisp \
+               --eval "(ccl-vm:load-ccl #p\"$PWD/ccl-bc/\" :ccl-directory #p\"$PWD/vmtree/\")" \
+               --eval '(ccl-vm:cloop)' > vm-rebuild.log 2>&1 <<'EOF'
+          (rebuild-ccl :clean t)
+          (format t "~&VM-REBUILD-DONE~%")
+          EOF
+          tail -40 vm-rebuild.log
+          grep -q VM-REBUILD-DONE vm-rebuild.log
+          echo "bc files: $(find vmtree -name '*.bc' | wc -l)"
+
+      - name: Cross-compile darwinx8664 from the VM
+        if: ${{ (github.event_name == 'push' || inputs.cross_compile) && matrix.runner == 'macos-15-intel' }}
+        run: |
+          rsync -a --exclude .git ccl/ xtree/
+          curl -sSfL -O $RELEASE_URL
+          tar -xzf darwinx86.tar.gz -C xtree
+          ln -s darwin-x86-headers64 xtree/cross-darwin-x86-headers64
+          sbcl $SBCL_OPTS --load vm-load.lisp \
+               --eval "(ccl-vm:load-ccl #p\"$PWD/ccl-bc/\" :ccl-directory #p\"$PWD/xtree/\")" \
+               --eval '(ccl-vm:cloop)' > vm-xc.log 2>&1 <<'EOF'
+          (load "ccl:tools;cvm-xcompile.lisp")
+          (cvm-load-cross-setup "ccl:tools;xdarwinx8664.lisp")
+          (let ((*warn-if-redefine-kernel* nil))
+            (cross-compile-ccl :darwinx8664 t)
+            (cross-xload-level-0 :darwinx8664 :force))
+          (format t "~&VM-XC-DONE~%")
+          EOF
+          tail -40 vm-xc.log
+          grep -q VM-XC-DONE vm-xc.log
+          (cd xtree/lisp-kernel/darwinx8664 && make)
+          cd xtree
+          echo '(save-application "dx86cl64.image")' | ./dx86cl64 --image-name x86-boot64.image --no-init --batch
+          ./dx86cl64 -n -b -e '(progn (format t "~&XC-BOOT-OK ~a~%" (lisp-implementation-version)) (quit))' | tee boot.log
+          grep -q XC-BOOT-OK boot.log
+
+      - name: Keep the logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vm-logs-${{ matrix.runner }}
+          path: "*.log"
