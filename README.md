@@ -4,11 +4,11 @@ A virtual machine, written in portable Common Lisp, that can run Clozure CL insi
 
 ccl-vm models the CCL runtime and can boot up CCL from ".bc" files generated from the CCL source code.  The .bc files are produced by the [bc-compiler fork of ccl](https://github.com/gzacharias/ccl/tree/bc-compiler).
 
-The .bc files are text files containing lisp forms, and can be checked into source control.
+The .bc files are text files containing lisp forms, and can be checked into source control.  They take the place of the image file used by native CCL.
 
 ## Requirements
 
-* A host Common Lisp running on macOS. Tested with ccl (1.13) and sbcl (2.6.9)
+* A host Common Lisp running on macOS. Tested with ccl (1.14) and sbcl (2.6.9)
 * ASDF and Quicklisp.
 * The .bc files bundle:  you can either download a prebuilt bundle from this repository's
 [Releases](https://github.com/gzacharias/ccl-vm/releases), or build one yourself by following
@@ -51,7 +51,7 @@ compiler, so the first use of anything is slower than the second.
 
 If you plan to recompile ccl, or reference the ccl sources in any way, you need to point the vm's "ccl:" logical host
 to where the ccl sources are (by default it gets set to the directory with the bc files).  You can do so either by
-setting the `CCL_VM_DEFAULT_DIRECTORY` shell variable to the source dir, or passing it as an argument to`load-ccl`:
+setting the `CCL_VM_DEFAULT_DIRECTORY` shell variable to the source dir, or passing it as an argument to `load-ccl`:
 ```
 (ccl-vm:load-ccl "/path/to/ccl-bc/" :ccl-directory "/path/to/sources/")
 ```
@@ -62,7 +62,7 @@ If you are running the vm inside ccl, and want to use the same sources, you can 
 
 ## Compiling CCL in the VM
 
-You can compile CCL in the VM the usual way.
+You can recompile CCL in the VM the usual way.
 ```
 ccl? (rebuild-ccl :clean t)
 ```
@@ -101,9 +101,9 @@ Currently the virtual machine can boot up and run the CCL REPL, though only with
 
 It can run (rebuild-ccl :clean t) to produce a new set of .bc files, boot from it and run rebuild-ccl again and produce the same result.
 
-It can also cross-compile a native ccl: on sbcl, it builds a darwinx8664 (Intel macOS) bootstrapping image in under 10 minutes, which the native kernel boots into a working CCL, as described above.
+It can also cross-compile a native ccl: on sbcl, it builds a darwinx8664 (Intel macOS) bootstrapping image in under 10 minutes, which the native kernel boots into a working CCL, as described above.  The native cross-compiling support is still very kludgy.
 
-Functionality outside what is needed to compile or cross compile ccl is hasn't been tested.
+Functionality outside what is needed to compile or cross compile ccl hasn't been tested.
 
 The foreign function support is kludgy and limited to darwin, so it can only run on darwin hosts.
 
