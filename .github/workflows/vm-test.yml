@@ -26,7 +26,7 @@ permissions:
 
 env:
   CCL_REF: ${{ inputs.ccl_ref || 'ci' }}
-  RELEASE_URL: https://github.com/Clozure/ccl/releases/download/v1.13/darwinx86.tar.gz
+  RELEASE_URL: https://github.com/Clozure/ccl/releases/download/v1.14/darwinx86.tar.gz
 
 jobs:
   bundle:
@@ -39,7 +39,7 @@ jobs:
           ref: ${{ env.CCL_REF }}
           path: ccl
 
-      - name: Install 1.13 bootstrapping binaries
+      - name: Install 1.14 bootstrapping binaries
         run: |
           curl -sSfL -O $RELEASE_URL
           tar -xzf darwinx86.tar.gz -C ccl
