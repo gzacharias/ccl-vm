@@ -1043,6 +1043,8 @@
 (deflapfunction %get-spin-lock (spin) spin)
 (deflapfunction %lock-gc-lock () 0)
 (deflapfunction %unlock-gc-lock () 0)
+;;; The VM is single-threaded, so there are no stores to order.
+(deflapfunction %store-store-barrier () nil)
 
 (cffi:defcfun (ff-dlsym "dlsym") :uint64
   (handle :uint64)
