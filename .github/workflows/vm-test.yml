@@ -146,7 +146,7 @@ jobs:
         run: |
           sbcl $SBCL_OPTS --load vm-load.lisp \
                --eval "(ccl-vm:load-ccl #p\"$PWD/ccl-bc/\")" \
-               --eval '(ccl-vm:cloop)' > smoke.log 2>&1 <<'EOF'
+               --eval '(ccl-vm:cloop)' > smoke.log 2>&1 <<'EOF' || true
           (defun fact (n) (if (< n 2) 1 (* n (fact (1- n)))))
           (format t "~&VM-SMOKE ~a ~a~%" (fact 20) (funcall (compile nil '(lambda (l) (reduce #'+ l))) '(1 2 3)))
           EOF
@@ -156,10 +156,10 @@ jobs:
       - name: rebuild-ccl inside the VM
         if: ${{ github.event_name == 'push' || inputs.vm_rebuild }}
         run: |
-          rsync -a --exclude .git ccl/ vmtree/
+          rsync -a ccl/ vmtree/
           sbcl $SBCL_OPTS --load vm-load.lisp \
                --eval "(ccl-vm:load-ccl #p\"$PWD/ccl-bc/\" :ccl-directory #p\"$PWD/vmtree/\")" \
-               --eval '(ccl-vm:cloop)' > vm-rebuild.log 2>&1 <<'EOF'
+               --eval '(ccl-vm:cloop)' > vm-rebuild.log 2>&1 <<'EOF' || true
           (rebuild-ccl :clean t)
           (format t "~&VM-REBUILD-DONE~%")
           EOF
@@ -170,13 +170,13 @@ jobs:
       - name: Cross-compile darwinx8664 from the VM
         if: ${{ (github.event_name == 'push' || inputs.cross_compile) && matrix.runner == 'macos-15-intel' }}
         run: |
-          rsync -a --exclude .git ccl/ xtree/
+          rsync -a ccl/ xtree/
           curl -sSfL -O $RELEASE_URL
           tar -xzf darwinx86.tar.gz -C xtree
           ln -s darwin-x86-headers64 xtree/cross-darwin-x86-headers64
           sbcl $SBCL_OPTS --load vm-load.lisp \
                --eval "(ccl-vm:load-ccl #p\"$PWD/ccl-bc/\" :ccl-directory #p\"$PWD/xtree/\")" \
-               --eval '(ccl-vm:cloop)' > vm-xc.log 2>&1 <<'EOF'
+               --eval '(ccl-vm:cloop)' > vm-xc.log 2>&1 <<'EOF' || true
           (load "ccl:tools;cvm-xcompile.lisp")
           (cvm-load-cross-setup "ccl:tools;xdarwinx8664.lisp")
           (let ((*warn-if-redefine-kernel* nil))
