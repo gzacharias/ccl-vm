@@ -1,8 +1,5 @@
 (in-package :ccl-vm)
 
-;; Maybe should load nfasload and just comment out %fasload?  I think there is a mechanism for
-;; different fasload backends already!
-
 (defmacro with-ccl-compiling-setup (flags &body body)
   (assert (null flags))
   #-sbcl `(progn ,@body)
@@ -67,7 +64,7 @@
         ;; The toplevel func basically calls #'toplevel-loop
         (catch (ccl-symbol :toplevel)
           (let ((*load-verbose* t))
-            (lap-%fasload (sym-value (ccl-symbol '*xload-startup-file*))))))))
+            (lap-%cvm-fasload (sym-value (ccl-symbol '*xload-startup-file*))))))))
 
   ;; The boot is over.  Stop redirecting REQUIRE's to the bc bundle.
   (ccl-funcall (sym-func (ccl 'forget-boot-search-path)))
@@ -89,7 +86,6 @@
   (let* ((files (sort (directory "level-0/**/*.bc") ;; TODO: get rid of "bc"? *.fasl-pathname* not defined til l1-files. use *xload-startup-file*?
                       #'string-lessp :key #'pathname-name))
          (calls (loop for file in files
-                  unless (string-equal (pathname-name file) "nfasload")
                   nconc (let ((*deferred-level-0-calls* (list t)))
                           (cvmload file)
                           (loop for call in (cdr (nreverse *deferred-level-0-calls*))
@@ -135,7 +131,7 @@
     
 
 ;;  When running in the VM, bc files need to be recognized as fasl files,
-;;  so our {%fasload} function can run and do the load using cvmload.  This is
+;;  so our {%cvm-fasload} function can run and do the load using cvmload.  This is
 ;;  accomplished by loading the cvm backend into the the VM, which makes {fasl-file-p}
 ;;  be true for bc files.
 

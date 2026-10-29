@@ -69,7 +69,13 @@
 ;; Modules the bc-compiler does not compile (*modules-not-for-cvm* in its compile-ccl.lisp).
 (defparameter *modules-not-in-bundle* '("edit-callers" "cover" "leaks" "core-files" "dominance" "backtrace-lds"))
 
-(deflapfunction %fasload (namestring)
+;; nfasload's %FASLOAD passes the files this is true of to %CVM-FASLOAD, and reads any
+;; other file as a native fasl (a cross-compiler's xfasload reads the target's fasls).
+(deflapfunction %cvm-fasl-file-p (namestring)
+  (equal (pathname-type (native-string namestring)) "bc"))
+
+;; Loads a .bc file.
+(deflapfunction %cvm-fasload (namestring)
   (let* ((filename (native-string namestring)))
     (assert (equal (pathname-type filename) "bc"))
     (if (probe-file filename)
@@ -1368,7 +1374,7 @@
   (setf (uvref result 1) (uvref dfloat 1))
   result)
 
-;;; stuff that was in nfasload.  Perhaps should load nfasload and just isolate the htab stuff?
+;;; The VM's packages and symbol tables, instead of nfasload's (which are #-cvm-target there).
 (deflapfunction register-package-ref (name)
   (register-package-ref name (pkg-arg name nil)))
 
