@@ -277,6 +277,20 @@ Or maybe have like ivectors and gvectors and only ivectors have complex data.
 
 (def-uvector-subtype :ratio (ccl-ratio (:subtag-conser t)))
 
+(defun ccl-number-p (obj)
+  (typecase obj
+    ((or ccl-fixnum single-float) t)
+    (ccl-uvector (let ((subtag (uvector-subtag obj)))
+                   (or (= subtag subtag-bignum)
+                       (= subtag subtag-double-float)
+                       (= subtag subtag-ratio)
+                       (= subtag subtag-complex)
+                       (= subtag subtag-complex-single-float)
+                       (= subtag subtag-complex-double-float))))
+    (t nil)))
+
+(deftype ccl-number () '(satisfies ccl-number-p))
+
 
 (def-uvector-subtype :macptr (ccl-macptr (:constructor %make-ccl-macptr) (:subtag-conser t)))
 
