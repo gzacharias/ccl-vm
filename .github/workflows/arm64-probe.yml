@@ -4,7 +4,8 @@
 # it on Apple Silicon, for bc-compiler and, as a control, for upstream-base (the upstream ccl
 # it's merged with, which has no bc compiler, so its probe stops after ccl-tests).  Then
 # compares the Intel and Apple Silicon bc bundles, which should be byte-identical.
-# A push to the ci-arm64 branch tests gzacharias/ccl's ci branch.
+# A push to the ci-arm64 branch tests gzacharias/ccl's nfasload-rework branch (and, as this
+# branch is ccl-vm's nfasload-rework, that version of the VM).
 name: Apple Silicon probe
 
 on:
@@ -24,7 +25,7 @@ jobs:
     uses: ./.github/workflows/native-probe.yml
     with:
       runner: macos-15-intel
-      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+      ccl_ref: ${{ inputs.ccl_ref || 'nfasload-rework' }}
       strict: true
       label: intel
 
@@ -33,18 +34,9 @@ jobs:
     uses: ./.github/workflows/native-probe.yml
     with:
       runner: macos-latest
-      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+      ccl_ref: ${{ inputs.ccl_ref || 'nfasload-rework' }}
       strict: false
       label: arm64
-
-  arm64-upstream:
-    needs: intel
-    uses: ./.github/workflows/native-probe.yml
-    with:
-      runner: macos-latest
-      ccl_ref: upstream-base
-      strict: false
-      label: arm64-upstream
 
   # The bundle is text and shouldn't depend on the machine that compiled it.
   compare:
