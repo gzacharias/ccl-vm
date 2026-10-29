@@ -171,7 +171,7 @@ jobs:
           (format t "~&VM-SMOKE ~a ~a~%" (fact 20) (funcall (compile nil '(lambda (l) (reduce #'+ l))) '(1 2 3)))
           EOF
           cat smoke.log
-          grep -q 'VM-SMOKE 2432902008176640000 6' smoke.log
+          grep -qx 'VM-SMOKE 2432902008176640000 6' smoke.log
 
       - name: rebuild-ccl inside the VM
         if: ${{ github.event_name == 'push' || inputs.vm_rebuild }}
@@ -185,7 +185,7 @@ jobs:
             (format t "~&VM-REBUILD-DONE~%"))
           EOF
           tail -40 vm-rebuild.log
-          grep -q VM-REBUILD-DONE vm-rebuild.log
+          grep -qx VM-REBUILD-DONE vm-rebuild.log   # whole line: a backtrace can quote the form's source
           echo "bc files: $(find vmtree -name '*.bc' | wc -l)"
 
       - name: Cross-compile darwinx8664 from the VM
@@ -207,7 +207,7 @@ jobs:
             (format t "~&VM-XC-DONE~%"))
           EOF
           tail -40 vm-xc.log
-          grep -q VM-XC-DONE vm-xc.log
+          grep -qx VM-XC-DONE vm-xc.log   # whole line: a backtrace can quote the form's source
           (cd xtree/lisp-kernel/darwinx8664 && make)
           cd xtree
           echo '(save-application "dx86cl64.image")' | ./dx86cl64 --image-name x86-boot64.image --no-init --batch
