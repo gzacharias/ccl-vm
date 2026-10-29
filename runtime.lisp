@@ -1434,11 +1434,6 @@
   (export-sym-from-pkg (sym-symvector sym) package)
   t)
 
-(deflapfunction provide (module) ;; bootstrapping version
-  (when (ccl-symvector-p module) (setq module  (sym-pname module)))
-  (check-type module ccl-simple-string)
-  (pushnew module (sym-value (ccl'*modules*)) :test 'uvector-equal))
-
 (deflapfunction set-package (name)
   (setf (sym-value (ccl-symbol '*package*)) (pkg-arg name)))
 
