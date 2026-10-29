@@ -1,5 +1,5 @@
 # Builds bc-compiler natively and compiles the bc bundle, then in parallel runs ccl-tests on the
-# native build and boots the bundle in ccl-vm on SBCL (Intel and Apple Silicon macs).
+# native build and boots the bundle in ccl-vm on SBCL (Intel mac).
 # A push to the ci branch tests gzacharias/ccl's ci branch and runs every step, including the VM
 # rebuild and cross-compile.  (Run workflow only shows up once this file is on the default branch.)
 name: Build bundle and test VM
@@ -15,7 +15,7 @@ on:
         type: boolean
         default: false
       cross_compile:
-        description: "Also cross-compile darwinx8664 from the VM and boot the result (Intel only)"
+        description: "Also cross-compile darwinx8664 from the VM and boot the result"
         type: boolean
         default: false
   push:
@@ -114,16 +114,7 @@ jobs:
 
   vm:
     needs: bundle
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15-intel
-            experimental: false
-          - runner: macos-latest       # Apple Silicon; the VM hasn't been tried there yet
-            experimental: true
-    runs-on: ${{ matrix.runner }}
-    continue-on-error: ${{ matrix.experimental }}
+    runs-on: macos-15-intel
     env:
       SBCL_OPTS: --dynamic-space-size 12GB --control-stack-size 512MB --noinform --non-interactive
     steps:
@@ -189,7 +180,7 @@ jobs:
           echo "bc files: $(find vmtree -name '*.bc' | wc -l)"
 
       - name: Cross-compile darwinx8664 from the VM
-        if: ${{ (github.event_name == 'push' || inputs.cross_compile) && matrix.runner == 'macos-15-intel' }}
+        if: ${{ github.event_name == 'push' || inputs.cross_compile }}
         run: |
           rsync -a ccl/ xtree/
           curl -sSfL -O $RELEASE_URL
@@ -218,5 +209,5 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: vm-logs-${{ matrix.runner }}
+          name: vm-logs
           path: "*.log"
