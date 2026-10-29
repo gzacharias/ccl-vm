@@ -1,5 +1,5 @@
-# Builds bc-compiler natively, compiles the bc bundle, runs ccl-tests on the native build,
-# then boots the bundle in ccl-vm on SBCL (Intel and Apple Silicon macs).
+# Builds bc-compiler natively and compiles the bc bundle, then in parallel runs ccl-tests on the
+# native build and boots the bundle in ccl-vm on SBCL (Intel and Apple Silicon macs).
 # A push to the ci branch tests gzacharias/ccl's ci branch and runs every step, including the VM
 # rebuild and cross-compile.  (Run workflow only shows up once this file is on the default branch.)
 name: Build bundle and test VM
@@ -82,6 +82,26 @@ jobs:
           name: ccl-bc
           path: ccl-bc.tar.gz
 
+      - name: Save the native build for ccl-tests
+        run: tar -czf ccl-native.tar.gz --exclude .git --exclude ccl-bc ccl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ccl-native
+          path: ccl-native.tar.gz
+
+  # Runs alongside the vm job, so the VM tests don't wait for ccl-tests.
+  ccl-tests:
+    needs: bundle
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ccl-native
+
+      - name: Unpack the native build
+        run: tar -xzf ccl-native.tar.gz
+
       - name: Check out ccl-tests
         uses: actions/checkout@v4
         with:
@@ -94,7 +114,6 @@ jobs:
 
   vm:
     needs: bundle
-    if: ${{ !cancelled() }}          # run even if only ccl-tests failed in the bundle job
     strategy:
       fail-fast: false
       matrix:
@@ -120,6 +139,7 @@ jobs:
           repository: gzacharias/ccl
           ref: ${{ env.CCL_REF }}
           path: ccl
+          fetch-depth: 0               # full history and tags, so `git describe` works for the version string
 
       - uses: actions/download-artifact@v4
         with:
@@ -160,8 +180,9 @@ jobs:
           sbcl $SBCL_OPTS --load vm-load.lisp \
                --eval "(ccl-vm:load-ccl #p\"$PWD/ccl-bc/\" :ccl-directory #p\"$PWD/vmtree/\")" \
                --eval '(ccl-vm:cloop)' > vm-rebuild.log 2>&1 <<'EOF' || true
-          (rebuild-ccl :clean t)
-          (format t "~&VM-REBUILD-DONE~%")
+          (progn
+            (rebuild-ccl :clean t)
+            (format t "~&VM-REBUILD-DONE~%"))
           EOF
           tail -40 vm-rebuild.log
           grep -q VM-REBUILD-DONE vm-rebuild.log
@@ -177,12 +198,13 @@ jobs:
           sbcl $SBCL_OPTS --load vm-load.lisp \
                --eval "(ccl-vm:load-ccl #p\"$PWD/ccl-bc/\" :ccl-directory #p\"$PWD/xtree/\")" \
                --eval '(ccl-vm:cloop)' > vm-xc.log 2>&1 <<'EOF' || true
-          (load "ccl:tools;cvm-xcompile.lisp")
-          (cvm-load-cross-setup "ccl:tools;xdarwinx8664.lisp")
-          (let ((*warn-if-redefine-kernel* nil))
-            (cross-compile-ccl :darwinx8664 t)
-            (cross-xload-level-0 :darwinx8664 :force))
-          (format t "~&VM-XC-DONE~%")
+          (progn
+            (load "ccl:tools;cvm-xcompile.lisp")
+            (cvm-load-cross-setup "ccl:tools;xdarwinx8664.lisp")
+            (let ((*warn-if-redefine-kernel* nil))
+              (cross-compile-ccl :darwinx8664 t)
+              (cross-xload-level-0 :darwinx8664 :force))
+            (format t "~&VM-XC-DONE~%"))
           EOF
           tail -40 vm-xc.log
           grep -q VM-XC-DONE vm-xc.log
