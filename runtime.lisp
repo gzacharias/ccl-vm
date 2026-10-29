@@ -926,15 +926,16 @@
   (file_name  :pointer)
   (result :pointer))
 
-(cffi:defcfun (ff-stat "stat$INODE64") :int
+;; The $INODE64 variants exist only on x86-64; arm64 has the 64-bit inode layout natively.
+(cffi:defcfun (ff-stat #+x86-64 "stat$INODE64" #-x86-64 "stat") :int
   (file_name  :pointer)
   (buf :pointer))
 
-(cffi:defcfun (ff-fstat "fstat$INODE64") :int
+(cffi:defcfun (ff-fstat #+x86-64 "fstat$INODE64" #-x86-64 "fstat") :int
   (fd  :int)
   (buf :pointer))
 
-(cffi:defcfun (ff-lstat "lstat$INODE64") :int
+(cffi:defcfun (ff-lstat #+x86-64 "lstat$INODE64" #-x86-64 "lstat") :int
   (path :pointer)
   (buf :pointer))
 
