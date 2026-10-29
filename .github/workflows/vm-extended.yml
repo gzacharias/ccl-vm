@@ -1,0 +1,157 @@
+# The long tests (about an hour or more), to run by hand or overnight.  Builds the bc bundle
+# (bundle.yml), then in parallel, each on its own machine:
+#   steady-state:     on sbcl, rebuilds ccl in the VM from the bundle (generation 1), then again
+#                     from generation 1 (generation 2); the two must be byte-identical.
+#   ccl-host-rebuild: rebuilds ccl in the VM with ccl 1.14 as the host; the result must be
+#                     byte-identical to sbcl's generation 1 (compared by the cross-host job).
+#   ccl-host-cross-compile: cross-compiles a native darwinx8664 ccl from the VM on ccl 1.14
+#                     and boots it.
+# A push to the ci-extended branch tests gzacharias/ccl's ci branch.
+# (Run workflow only shows up once this file is on the default branch.)
+# The steps' scripts are in .github/ci/.
+name: Extended VM tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      ccl_ref:
+        description: "gzacharias/ccl branch, tag or commit to build"
+        default: bc-compiler
+  push:
+    branches: [ci-extended]
+
+permissions:
+  contents: read
+
+env:
+  CCL_REF: ${{ inputs.ccl_ref || 'ci' }}
+
+jobs:
+  bundle:
+    uses: ./.github/workflows/bundle.yml
+    with:
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+
+  steady-state:
+    needs: bundle
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ccl-vm
+      - uses: actions/checkout@v4
+        with:
+          repository: gzacharias/ccl
+          ref: ${{ env.CCL_REF }}
+          path: ccl
+      - uses: actions/download-artifact@v4
+        with:
+          name: ccl-bc
+      - name: Install sbcl and Quicklisp
+        run: ccl-vm/.github/ci/install-hosts.sh sbcl
+
+      - name: Generation 1 (rebuild ccl in the VM from the native bundle)
+        run: ccl-vm/.github/ci/vm-rebuild.sh sbcl ccl-bc gen1
+
+      - name: Generation 2 (rebuild ccl in the VM from generation 1)
+        run: ccl-vm/.github/ci/vm-rebuild.sh sbcl gen1 gen2
+
+      - name: Generation 2 must equal generation 1
+        run: |
+          diff -rq gen1 gen2
+          echo "steady state: generation 2 is byte-identical to generation 1"
+
+      - name: Save generation 1, for the cross-host comparison
+        if: ${{ !cancelled() }}
+        run: tar -czf vm-bundle-sbcl.tar.gz gen1
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vm-bundle-sbcl
+          path: vm-bundle-sbcl.tar.gz
+
+      - name: Keep the logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: steady-state-logs
+          path: "*.log"
+
+  ccl-host-rebuild:
+    needs: bundle
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ccl-vm
+      - uses: actions/checkout@v4
+        with:
+          repository: gzacharias/ccl
+          ref: ${{ env.CCL_REF }}
+          path: ccl
+      - uses: actions/download-artifact@v4
+        with:
+          name: ccl-bc
+      - name: Install ccl 1.14 and Quicklisp
+        run: ccl-vm/.github/ci/install-hosts.sh ccl
+
+      - name: Rebuild ccl in the VM (ccl host)
+        run: ccl-vm/.github/ci/vm-rebuild.sh ccl ccl-bc vm-bundle-ccl
+
+      - name: Save the result, for the cross-host comparison
+        run: tar -czf vm-bundle-ccl.tar.gz vm-bundle-ccl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vm-bundle-ccl
+          path: vm-bundle-ccl.tar.gz
+
+      - name: Keep the logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccl-host-rebuild-logs
+          path: "*.log"
+
+  # The VM should compile the same .bc files whichever lisp it runs on.
+  cross-host:
+    needs: [steady-state, ccl-host-rebuild]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: vm-bundle-*
+          merge-multiple: true
+      - name: The ccl host's bundle must equal the sbcl host's
+        run: |
+          tar -xzf vm-bundle-sbcl.tar.gz
+          tar -xzf vm-bundle-ccl.tar.gz
+          diff -rq gen1 vm-bundle-ccl && echo "the bundles built in the VM on sbcl and on ccl are byte-identical"
+
+  ccl-host-cross-compile:
+    needs: bundle
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ccl-vm
+      - uses: actions/checkout@v4
+        with:
+          repository: gzacharias/ccl
+          ref: ${{ env.CCL_REF }}
+          path: ccl
+          fetch-depth: 0               # full history and tags, so `git describe` works for the version string
+      - uses: actions/download-artifact@v4
+        with:
+          name: ccl-bc
+      - name: Install ccl 1.14 and Quicklisp
+        run: ccl-vm/.github/ci/install-hosts.sh ccl
+
+      - name: Cross-compile darwinx8664 from the VM (ccl host)
+        run: ccl-vm/.github/ci/vm-cross-compile.sh ccl
+
+      - name: Keep the logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccl-host-cross-compile-logs
+          path: "*.log"

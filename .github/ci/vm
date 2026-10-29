@@ -1,0 +1,21 @@
+#!/bin/bash
+# usage: vm HOST BUNDLE-DIR [CCL-SOURCE-DIR] < forms
+# Boots the bc bundle in BUNDLE-DIR in ccl-vm, on HOST (sbcl or ccl), and runs the CCL listener
+# on stdin.  CCL-SOURCE-DIR, if given, becomes the VM's "ccl:" directory.
+# Uses $SBCL (default sbcl) or $CCL_HOST as the host lisp.
+set -eu
+host=$1
+bundle=$(cd "$2" && pwd)
+args="#p\"$bundle/\""
+if [ $# -ge 3 ]; then
+  args="$args :ccl-directory #p\"$(cd "$3" && pwd)/\""
+fi
+prologue="$(cd "$(dirname "$0")" && pwd)/vm-prologue.lisp"
+
+case $host in
+  sbcl) exec ${SBCL:-sbcl} --dynamic-space-size 12GB --control-stack-size 512MB --noinform --non-interactive \
+             --load "$prologue" --eval "(ccl-vm:load-ccl $args)" --eval '(ccl-vm:cloop)' ;;
+  ccl)  exec "$CCL_HOST" --no-init --batch \
+             --load "$prologue" --eval "(ccl-vm:load-ccl $args)" --eval '(ccl-vm:cloop)' ;;
+  *)    echo "unknown host $host" >&2; exit 1 ;;
+esac

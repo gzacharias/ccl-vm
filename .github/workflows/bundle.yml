@@ -1,0 +1,77 @@
+# Reusable workflow, called by vm-test.yml and vm-extended.yml: builds bc-compiler natively,
+# starting from the ccl 1.14 binaries, and compiles the bc bundle.  Uploads two artifacts:
+# ccl-bc (the bundle) and ccl-native (the native build, for running ccl-tests).
+name: Build bundle
+
+on:
+  workflow_call:
+    inputs:
+      ccl_ref:
+        description: "gzacharias/ccl branch, tag or commit to build"
+        type: string
+        required: true
+
+env:
+  RELEASE_URL: https://github.com/Clozure/ccl/releases/download/v1.14/darwinx86.tar.gz
+
+jobs:
+  bundle:
+    runs-on: macos-15-intel
+    steps:
+      - name: Check out bc-compiler
+        uses: actions/checkout@v4
+        with:
+          repository: gzacharias/ccl
+          ref: ${{ inputs.ccl_ref }}
+          path: ccl
+
+      - name: Install 1.14 bootstrapping binaries
+        run: |
+          curl -sSfL -O $RELEASE_URL
+          tar -xzf darwinx86.tar.gz -C ccl
+
+      - name: First rebuild (with kernel)
+        working-directory: ccl
+        run: |
+          ./dx86cl64 -n -b <<'EOF'
+          (let ((*warn-if-redefine-kernel* nil)) (load "ccl:lib;compile-ccl.lisp"))
+          (rebuild-ccl :clean t :kernel t)
+          (format t "~&BUILD1-DONE~%")
+          (quit)
+          EOF
+
+      - name: Second rebuild (should be warning-free)
+        working-directory: ccl
+        run: |
+          ./dx86cl64 -n -b > ../build2.log 2>&1 <<'EOF'
+          (rebuild-ccl :clean t)
+          (format t "~&BUILD2-DONE~%")
+          (quit)
+          EOF
+          cat ../build2.log
+          grep -q BUILD2-DONE ../build2.log
+          if grep -q ';Compiler warnings' ../build2.log; then echo "::error::second rebuild has warnings"; exit 1; fi
+
+      - name: Compile the bc bundle
+        working-directory: ccl
+        run: |
+          ./dx86cl64 -n -b <<'EOF'
+          (ccl:bc-compile-ccl :force t :output "ccl:ccl-bc;")
+          (format t "~&BC-DONE~%")
+          (quit)
+          EOF
+          echo "bc files: $(find ccl-bc -name '*.bc' | wc -l)"
+          tar -czf ../ccl-bc.tar.gz ccl-bc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ccl-bc
+          path: ccl-bc.tar.gz
+
+      - name: Save the native build for ccl-tests
+        run: tar -czf ccl-native.tar.gz --exclude .git --exclude ccl-bc ccl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ccl-native
+          path: ccl-native.tar.gz
