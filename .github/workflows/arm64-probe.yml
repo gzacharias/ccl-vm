@@ -1,7 +1,9 @@
 # Probe for running bc-compiler on Apple Silicon (gzacharias/ccl#4).  First runs the whole
 # probe (native-probe.yml) on an Intel mac, where everything is known to work, so that a broken
 # workflow fails there instead of wasting a scarce Apple Silicon run.  Only if that passes, runs
-# it on Apple Silicon, then compares the two bc bundles, which should be byte-identical.
+# it on Apple Silicon, for bc-compiler and, as a control, for upstream-base (the upstream ccl
+# it's merged with, which has no bc compiler, so its probe stops after ccl-tests).  Then
+# compares the Intel and Apple Silicon bc bundles, which should be byte-identical.
 # A push to the ci-arm64 branch tests gzacharias/ccl's ci branch.
 name: Apple Silicon probe
 
@@ -24,6 +26,7 @@ jobs:
       runner: macos-15-intel
       ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
       strict: true
+      label: intel
 
   arm64:
     needs: intel
@@ -32,6 +35,16 @@ jobs:
       runner: macos-latest
       ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
       strict: false
+      label: arm64
+
+  arm64-upstream:
+    needs: intel
+    uses: ./.github/workflows/native-probe.yml
+    with:
+      runner: macos-latest
+      ccl_ref: upstream-base
+      strict: false
+      label: arm64-upstream
 
   # The bundle is text and shouldn't depend on the machine that compiled it.
   compare:
@@ -44,12 +57,12 @@ jobs:
           pattern: ccl-bc-*
       - name: The Apple Silicon bundle must equal the Intel one
         run: |
-          if [ ! -f ccl-bc-ARM64/ccl-bc.tar.gz ]; then
+          if [ ! -f ccl-bc-arm64/ccl-bc.tar.gz ]; then
             echo "::error::no Apple Silicon bundle (the arm64 probe didn't get that far)"; exit 1
           fi
           mkdir intel arm64
-          tar -xzf ccl-bc-X64/ccl-bc.tar.gz -C intel
-          tar -xzf ccl-bc-ARM64/ccl-bc.tar.gz -C arm64
+          tar -xzf ccl-bc-intel/ccl-bc.tar.gz -C intel
+          tar -xzf ccl-bc-arm64/ccl-bc.tar.gz -C arm64
           echo "bc files: intel $(find intel -name '*.bc' | wc -l), arm64 $(find arm64 -name '*.bc' | wc -l)"
           if diff -r intel arm64 > bundle-diff.txt; then
             echo "the bundles built on Intel and on Apple Silicon are byte-identical"

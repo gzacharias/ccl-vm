@@ -3,8 +3,9 @@
 # the result as far as it gets: boots the bundle in ccl-vm on sbcl, runs ccl-tests on the native
 # build, and rebuilds ccl in the VM.  Each step that can still run after a failure does
 # (and unless strict, the failure doesn't fail the job), so a single run collects as much as
-# possible.  Uploads ccl-bc-<arch>
-# (the bundle) and logs-<arch>; the job summary lists every step's outcome.
+# possible.  If the first rebuild fails, boots its boot image in the kernel debugger to see why.
+# Uploads ccl-bc-<label> (the bundle) and logs-<label>; the job summary lists every step's
+# outcome.
 name: Native build probe
 
 on:
@@ -21,6 +22,10 @@ on:
       strict:
         description: "Fail the job at the first failing step (for the known-good control run)"
         type: boolean
+        required: true
+      label:
+        description: "Distinguishes this job's artifacts (ccl-bc-LABEL, logs-LABEL)"
+        type: string
         required: true
 
 jobs:
@@ -69,6 +74,25 @@ jobs:
           # Whole-line match: a backtrace can quote the form's source.
           grep -qx BUILD1-DONE ../build1.log
 
+      # If the new boot image doesn't boot, rebuild-ccl only reports that it failed (it runs it in
+      # batch mode).  Boot it again outside batch mode, so a crash lands in the kernel debugger,
+      # which reads these commands from stdin: describe the exception, registers, lisp registers,
+      # backtrace, kill.
+      - name: Boot the new boot image in the kernel debugger
+        id: boot-debug
+        if: ${{ !cancelled() && steps.build1.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        working-directory: ccl
+        run: |
+          image=$(ls *-boot*.image | head -1)
+          [ -n "$image" ] || { echo "::error::no boot image"; exit 1; }
+          echo "boot image: $image"
+          status=0
+          printf 'D\nR\nL\nB\nK\n' | ./$KERNEL --image-name "$image" --no-init > ../boot-debug.log 2>&1 || status=$?
+          cat ../boot-debug.log
+          echo "exit status $status"
+
       - name: Second rebuild (should be warning-free)
         id: build2
         if: ${{ !cancelled() && steps.build1.outcome == 'success' }}
@@ -110,7 +134,7 @@ jobs:
       - if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ccl-bc-${{ runner.arch }}
+          name: ccl-bc-${{ inputs.label }}
           path: ccl-bc.tar.gz
 
       - name: Check out ccl-vm
@@ -160,10 +184,11 @@ jobs:
         if: ${{ always() }}
         run: |
           {
-            echo "### ${{ inputs.runner }} ($(uname -m))"
+            echo "### ${{ inputs.label }}: ${{ inputs.ccl_ref }} on ${{ inputs.runner }} ($(uname -m))"
             echo "| step | outcome |"
             echo "|---|---|"
             echo "| first rebuild | ${{ steps.build1.outcome }} |"
+            echo "| boot image in kernel debugger | ${{ steps.boot-debug.outcome }} |"
             echo "| second rebuild | ${{ steps.build2.outcome }} |"
             echo "| bc bundle | ${{ steps.bundle.outcome }} |"
             echo "| boot bundle in VM | ${{ steps.smoke.outcome }} |"
@@ -175,5 +200,5 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ runner.arch }}
+          name: logs-${{ inputs.label }}
           path: "*.log"
