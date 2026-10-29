@@ -1,0 +1,66 @@
+# Probe for running bc-compiler on Apple Silicon (gzacharias/ccl#4).  First runs the whole
+# probe (native-probe.yml) on an Intel mac, where everything is known to work, so that a broken
+# workflow fails there instead of wasting a scarce Apple Silicon run.  Only if that passes, runs
+# it on Apple Silicon, then compares the two bc bundles, which should be byte-identical.
+# A push to the ci-arm64 branch tests gzacharias/ccl's ci branch.
+name: Apple Silicon probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      ccl_ref:
+        description: "gzacharias/ccl branch, tag or commit to build"
+        default: bc-compiler
+  push:
+    branches: [ci-arm64]
+
+permissions:
+  contents: read
+
+jobs:
+  intel:
+    uses: ./.github/workflows/native-probe.yml
+    with:
+      runner: macos-15-intel
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+      strict: true
+
+  arm64:
+    needs: intel
+    uses: ./.github/workflows/native-probe.yml
+    with:
+      runner: macos-latest
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+      strict: false
+
+  # The bundle is text and shouldn't depend on the machine that compiled it.
+  compare:
+    needs: [intel, arm64]
+    if: ${{ !cancelled() && needs.intel.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ccl-bc-*
+      - name: The Apple Silicon bundle must equal the Intel one
+        run: |
+          if [ ! -f ccl-bc-ARM64/ccl-bc.tar.gz ]; then
+            echo "::error::no Apple Silicon bundle (the arm64 probe didn't get that far)"; exit 1
+          fi
+          mkdir intel arm64
+          tar -xzf ccl-bc-X64/ccl-bc.tar.gz -C intel
+          tar -xzf ccl-bc-ARM64/ccl-bc.tar.gz -C arm64
+          echo "bc files: intel $(find intel -name '*.bc' | wc -l), arm64 $(find arm64 -name '*.bc' | wc -l)"
+          if diff -r intel arm64 > bundle-diff.txt; then
+            echo "the bundles built on Intel and on Apple Silicon are byte-identical"
+          else
+            grep -c '^diff\|^Only in' bundle-diff.txt || true
+            head -200 bundle-diff.txt
+            echo "::error::the bundles differ (full diff in the bundle-diff artifact)"
+            exit 1
+          fi
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-diff
+          path: bundle-diff.txt

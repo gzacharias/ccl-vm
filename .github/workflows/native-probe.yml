@@ -1,0 +1,179 @@
+# Reusable workflow, called by arm64-probe.yml: builds bc-compiler natively on one kind of mac,
+# starting from the ccl 1.14 binaries for its architecture, compiles the bc bundle, and tests
+# the result as far as it gets: boots the bundle in ccl-vm on sbcl, runs ccl-tests on the native
+# build, and rebuilds ccl in the VM.  Each step that can still run after a failure does
+# (and unless strict, the failure doesn't fail the job), so a single run collects as much as
+# possible.  Uploads ccl-bc-<arch>
+# (the bundle) and logs-<arch>; the job summary lists every step's outcome.
+name: Native build probe
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: "GitHub runner label"
+        type: string
+        required: true
+      ccl_ref:
+        description: "gzacharias/ccl branch, tag or commit to build"
+        type: string
+        required: true
+      strict:
+        description: "Fail the job at the first failing step (for the known-good control run)"
+        type: boolean
+        required: true
+
+jobs:
+  probe:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 240
+    steps:
+      - name: Check out bc-compiler
+        uses: actions/checkout@v4
+        with:
+          repository: gzacharias/ccl
+          ref: ${{ inputs.ccl_ref }}
+          path: ccl
+          fetch-depth: 0               # full history and tags, so `git describe` works for the version string
+
+      - name: Install 1.14 bootstrapping binaries
+        run: |
+          case $(uname -m) in
+            arm64)  kernel=darm64cl;  tarball=darwinarm64.tar.gz ;;
+            x86_64) kernel=dx86cl64; tarball=darwinx86.tar.gz ;;
+            *)      echo "::error::unknown architecture $(uname -m)"; exit 1 ;;
+          esac
+          echo "KERNEL=$kernel" >> "$GITHUB_ENV"
+          curl -sSfL -O https://github.com/Clozure/ccl/releases/download/v1.14/$tarball
+          tar -xzf $tarball -C ccl
+          {
+            sw_vers; uname -m; sysctl -n hw.ncpu machdep.cpu.brand_string
+            clang --version | head -1; make --version | head -1
+            git -C ccl log -1 --format='ccl %h %s'
+            ccl/$kernel -n -b -e '(progn (format t "~&~a~%" (lisp-implementation-version)) (quit))'
+          } 2>&1 | tee system.log
+
+      - name: First rebuild (with kernel)
+        id: build1
+        continue-on-error: ${{ !inputs.strict }}
+        working-directory: ccl
+        run: |
+          ./$KERNEL -n -b > ../build1.log 2>&1 <<'EOF' || true
+          (let ((*warn-if-redefine-kernel* nil)) (load "ccl:lib;compile-ccl.lisp"))
+          (progn
+            (rebuild-ccl :clean t :kernel t)
+            (format t "~&BUILD1-DONE~%"))
+          (quit)
+          EOF
+          cat ../build1.log
+          # Whole-line match: a backtrace can quote the form's source.
+          grep -qx BUILD1-DONE ../build1.log
+
+      - name: Second rebuild (should be warning-free)
+        id: build2
+        if: ${{ !cancelled() && steps.build1.outcome == 'success' }}
+        continue-on-error: ${{ !inputs.strict }}
+        working-directory: ccl
+        run: |
+          ./$KERNEL -n -b > ../build2.log 2>&1 <<'EOF' || true
+          (progn
+            (rebuild-ccl :clean t)
+            (format t "~&BUILD2-DONE~%"))
+          (quit)
+          EOF
+          cat ../build2.log
+          grep -qx BUILD2-DONE ../build2.log
+          # Warnings don't stop the probe from going on to make the bundle.
+          if grep -q ';Compiler warnings' ../build2.log; then
+            echo "::warning::second rebuild has warnings"
+            ${{ inputs.strict }} && exit 1
+          fi
+          true
+
+      - name: Compile the bc bundle
+        id: bundle
+        if: ${{ !cancelled() && steps.build2.outcome == 'success' }}
+        continue-on-error: ${{ !inputs.strict }}
+        working-directory: ccl
+        run: |
+          ./$KERNEL -n -b > ../bc.log 2>&1 <<'EOF' || true
+          (progn
+            (ccl:bc-compile-ccl :force t :output "ccl:ccl-bc;")
+            (format t "~&BC-DONE~%"))
+          (quit)
+          EOF
+          cat ../bc.log
+          grep -qx BC-DONE ../bc.log
+          echo "bc files: $(find ccl-bc -name '*.bc' | wc -l)"
+          tar -czf ../ccl-bc.tar.gz ccl-bc
+
+      - if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccl-bc-${{ runner.arch }}
+          path: ccl-bc.tar.gz
+
+      - name: Check out ccl-vm
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
+        uses: actions/checkout@v4
+        with:
+          path: ccl-vm
+
+      - name: Install sbcl and Quicklisp
+        id: hosts
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
+        run: ccl-vm/.github/ci/install-hosts.sh sbcl
+
+      - name: Boot the bundle in the VM (sbcl host)
+        id: smoke
+        if: ${{ !cancelled() && steps.hosts.outcome == 'success' }}
+        continue-on-error: ${{ !inputs.strict }}
+        run: ccl-vm/.github/ci/vm-smoke.sh sbcl
+
+      - name: Check out ccl-tests
+        if: ${{ !cancelled() && steps.build2.outcome == 'success' }}
+        uses: actions/checkout@v4
+        with:
+          repository: Clozure/ccl-tests
+          path: ccl-tests
+
+      - name: Run ccl-tests on the native build
+        id: ccl-tests
+        if: ${{ !cancelled() && steps.build2.outcome == 'success' }}
+        continue-on-error: ${{ !inputs.strict }}
+        timeout-minutes: 60
+        working-directory: ccl-tests
+        run: |
+          status=0
+          make CCL=../ccl/$KERNEL > ../ccl-tests.log 2>&1 || status=$?
+          tail -60 ../ccl-tests.log
+          exit $status
+
+      - name: rebuild-ccl inside the VM (sbcl host)
+        id: vm-rebuild
+        if: ${{ !cancelled() && steps.smoke.outcome == 'success' }}
+        continue-on-error: ${{ !inputs.strict }}
+        timeout-minutes: 60
+        run: ccl-vm/.github/ci/vm-rebuild.sh sbcl ccl-bc vm-rebuild
+
+      - name: Summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### ${{ inputs.runner }} ($(uname -m))"
+            echo "| step | outcome |"
+            echo "|---|---|"
+            echo "| first rebuild | ${{ steps.build1.outcome }} |"
+            echo "| second rebuild | ${{ steps.build2.outcome }} |"
+            echo "| bc bundle | ${{ steps.bundle.outcome }} |"
+            echo "| boot bundle in VM | ${{ steps.smoke.outcome }} |"
+            echo "| ccl-tests | ${{ steps.ccl-tests.outcome }} |"
+            echo "| rebuild-ccl in VM | ${{ steps.vm-rebuild.outcome }} |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ runner.arch }}
+          path: "*.log"
