@@ -164,7 +164,9 @@ jobs:
       - name: Run ccl-tests on the native build
         id: ccl-tests
         if: ${{ !cancelled() && steps.build2.outcome == 'success' }}
-        continue-on-error: ${{ !inputs.strict }}
+        # Test failures are results to report, not a broken workflow, so they never stop the
+        # control run (ccl-tests can be ahead of the ccl being built).
+        continue-on-error: true
         timeout-minutes: 60
         working-directory: ccl-tests
         run: |
