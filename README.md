@@ -2,7 +2,7 @@
 
 A virtual machine, written in portable Common Lisp, that can run Clozure CL inside another Lisp.
 
-ccl-vm models the CCL runtime and can boot up CCL from ".bc" files generated from the CCL source code.  The .bc files are produced by the [bc-compiler fork of ccl](https://github.com/gzacharias/ccl/tree/bc-compiler).
+ccl-vm models the CCL runtime and can boot up CCL from ".bc" files generated from the CCL source code.  The .bc files are produced by the [bc-compiler fork of CCL](https://github.com/gzacharias/ccl/tree/bc-compiler).
 
 The .bc files are text files containing lisp forms, and can be checked into source control.  They take the place of the image file used by native CCL.
 
@@ -49,8 +49,8 @@ ccl? (fact 20)
 Functions are translated into host Lisp code the first time they are called, and compiled by the host's
 compiler, so the first use of anything is slower than the second.
 
-If you plan to recompile ccl, or reference the ccl sources in any way, you need to point the vm's "ccl:" logical host
-to where the ccl sources are (by default it gets set to the directory with the bc files).  You can do so either by
+If you plan to recompile CCL, or reference the CCL sources in any way, you need to point the vm's "ccl:" logical host
+to where the CCL sources are (by default it gets set to the directory with the bc files).  You can do so either by
 setting the `CCL_VM_DEFAULT_DIRECTORY` shell variable to the source dir, or passing it as an argument to `load-ccl`:
 ```
 (ccl-vm:load-ccl "/path/to/ccl-bc/" :ccl-directory "/path/to/sources/")
@@ -62,7 +62,7 @@ If you are running the vm inside ccl, and want to use the same sources, you can 
 
 ## Compiling CCL in the VM
 
-You can recompile CCL in the VM the usual way.
+CCL running in ccl-vm can recompile itself in the usual way:
 ```
 ccl? (rebuild-ccl :clean t)
 ```
@@ -72,10 +72,9 @@ This will leave `.bc` files in the VM's "ccl:" directory, in all the places that
 ccl? (ccl::collect-all-fasls "/path/to/new-ccl-bc/")
 ```
 
-
 ## Cross-compiling from the VM
 
-CCL running in ccl-vm can cross-compile a native CCL.  So far this has been done for one target, darwinx8664 (Intel macOS): the VM, hosted in sbcl, compiles ccl's sources (bc-compiler branch) and writes a bootstrapping image that the native kernel boots.
+CCL running in ccl-vm can cross-compile a native CCL.  So far this has been done for one target, darwinx8664 (Intel macOS): the VM, hosted in sbcl or ccl, compiles ccl's sources (bc-compiler branch) and writes a bootstrapping image that the native kernel boots.
 
 To do this, load ccl-vm with the bundle, pointing `ccl:` at a copy of the sources as described above.  The cross-compiler also needs `ccl:cross-darwin-x86-headers64;` which can be a link to `darwin-x86-headers64`:
 ```
@@ -89,7 +88,7 @@ ccl? (let ((*warn-if-redefine-kernel* nil))
        (cross-compile-ccl :darwinx8664 t)
        (cross-xload-level-0 :darwinx8664 :force))
 ```
-This takes 6 to 9 minutes on SBCL.  It leaves `.dx64fsl` files next to the sources and `x86-boot64.image` in the `ccl:` directory.  Boot that image with a `dx86cl64` kernel built from the same sources and save a full image:
+On GitHub's Intel macOS runners this takes about 10 minutes hosted in SBCL, about 50 in CCL.  It leaves `.dx64fsl` files next to the sources and `x86-boot64.image` in the `ccl:` directory.  Boot that image with a `dx86cl64` kernel built from the same sources and save a full image:
 ```
 ./dx86cl64 --image-name x86-boot64.image
 (save-application "dx86cl64.image")
@@ -97,19 +96,21 @@ This takes 6 to 9 minutes on SBCL.  It leaves `.dx64fsl` files next to the sourc
 
 ## State of the project
 
-Currently the virtual machine can boot up and run the CCL REPL, though only with limited error handling.
+Currently the virtual machine, hosted in either SBCL or CCL, has reached the following milestones:
 
-It can run (rebuild-ccl :clean t) to produce a new set of .bc files, boot from it and run rebuild-ccl again and produce the same result.
+* It can boot up and run the CCL REPL, though only with limited error handling.
 
-It can also cross-compile a native ccl: on sbcl, it builds a darwinx8664 (Intel macOS) bootstrapping image in under 10 minutes, which the native kernel boots into a working CCL, as described above.  The native cross-compiling support is still very kludgy.
+* It can run (rebuild-ccl :clean t) to produce a new set of .bc files, boot from it and run rebuild-ccl again and produce the same result.  It produces the same .bc files whether it's hosted in SBCL or CCL.
 
-Functionality outside what is needed to compile or cross compile ccl hasn't been tested.
+* It can also cross-compile a native ccl: it builds a darwinx8664 (Intel macOS) bootstrapping image, which the native kernel boots into a working CCL, as described above.  The support for cross-compiling to native is still very kludgy.
 
-The foreign function support is kludgy and limited to darwin, so it can only run on darwin hosts.
+Functionality outside what is needed to compile or cross compile CCL hasn't been tested.
+
+The foreign function support is kludgy and limited to darwin, so it can only build for darwin targets.
 
 The VM is single-threaded.  The primary goal of this project is to be able to run the CCL compiler in another lisp, so threads are not a priority.
 
-On my machine, rebuild-ccl takes about half an hour in ccl, about 6 minutes in sbcl.
+On my machine (Intel imac), rebuild-ccl takes about half an hour in CCL, about 6 minutes in SBCL.  On GitHub's Intel macOS runners it takes about an hour in CCL, about 10 minutes in SBCL, and cross-compiling takes about 50 minutes in CCL, about 10 in SBCL.
 
 
 ## How it works
