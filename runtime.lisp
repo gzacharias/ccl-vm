@@ -1343,11 +1343,6 @@
   (check-type dfloat ccl-double-float)
   (values (uvref dfloat 1) (uvref dfloat 0)))
 
-(deflapfunction double-float-from-bits (high low)
-  (check-type high (unsigned-byte 32))
-  (check-type low (unsigned-byte 32))
-  (make-uvector subtag-double-float (vector low high)))
-
 (deflapfunction %dfloat-hash (dfloat)
   (check-type dfloat ccl-double-float)
   ;; TODO: need to make ccl fixnum, plus shouldn't cons a bignum.
