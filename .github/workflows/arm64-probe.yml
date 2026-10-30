@@ -14,6 +14,9 @@ on:
       ccl_ref:
         description: "gzacharias/ccl branch, tag or commit to build"
         default: bc-compiler
+      upstream_ref:
+        description: "If given, also probe this gzacharias/ccl commit (an upstream ccl, no bc compiler) on Apple Silicon"
+        default: ""
   push:
     branches: [ci-arm64]
 
@@ -37,6 +40,16 @@ jobs:
       ccl_ref: ${{ inputs.ccl_ref || 'nfasload-rework' }}
       strict: false
       label: arm64
+
+  arm64-upstream:
+    needs: intel
+    if: ${{ inputs.upstream_ref != '' && inputs.upstream_ref != null }}
+    uses: ./.github/workflows/native-probe.yml
+    with:
+      runner: macos-latest
+      ccl_ref: ${{ inputs.upstream_ref }}
+      strict: false
+      label: arm64-upstream
 
   # The bundle is text and shouldn't depend on the machine that compiled it.
   compare:
