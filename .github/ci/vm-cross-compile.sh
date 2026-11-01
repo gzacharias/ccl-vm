@@ -14,8 +14,7 @@ tar -xzf darwinx86.tar.gz -C "$tree"
 ln -s darwin-x86-headers64 "$tree/cross-darwin-x86-headers64"
 "$(dirname "$0")/vm" "$host" ccl-bc "$tree" > "$log" 2>&1 <<'EOF' || true
 (progn
-  (load "ccl:tools;cvm-xcompile.lisp")
-  (cvm-load-cross-setup "ccl:tools;xdarwinx8664.lisp")
+  (load "ccl:tools;xdarwinx8664.lisp")
   (let ((*warn-if-redefine-kernel* nil))
     (cross-compile-ccl :darwinx8664 t)
     (cross-xload-level-0 :darwinx8664 :force))

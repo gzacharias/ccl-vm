@@ -82,8 +82,7 @@ ln -s darwin-x86-headers64 cross-darwin-x86-headers64
 ```
 Then, in the VM's `cloop`:
 ```
-ccl? (load "ccl:tools;cvm-xcompile.lisp")
-ccl? (cvm-load-cross-setup "ccl:tools;xdarwinx8664.lisp")
+ccl? (load "ccl:tools;xdarwinx8664.lisp")
 ccl? (let ((*warn-if-redefine-kernel* nil))
        (cross-compile-ccl :darwinx8664 t)
        (cross-xload-level-0 :darwinx8664 :force))
