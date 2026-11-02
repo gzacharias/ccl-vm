@@ -66,9 +66,6 @@
   (let ((*package* *native-package*))
     (apply #'break (native-string str) args)))
 
-;; Modules the bc-compiler does not compile (*modules-not-for-cvm* in its compile-ccl.lisp).
-(defparameter *modules-not-in-bundle* '("edit-callers" "cover" "leaks" "core-files" "dominance" "backtrace-lds"))
-
 ;; nfasload's %FASLOAD passes the files this is true of to %CVM-FASLOAD, and reads any
 ;; other file as a native fasl (a cross-compiler's xfasload reads the target's fasls).
 (deflapfunction %cvm-fasl-file-p (namestring)
@@ -78,14 +75,10 @@
 (deflapfunction %cvm-fasload (namestring)
   (let* ((filename (native-string namestring)))
     (assert (equal (pathname-type filename) "bc"))
-    (if (probe-file filename)
-      (progn (cvmload filename) t)
-      (progn
-        (if (and *loading-ccl*
-                 (member (pathname-name filename) *modules-not-in-bundle* :test 'string-equal))
-          (format t "~&***SKIPPING ~s" filename)
-          (error "~s not found" namestring))
-        nil))))
+    (unless (probe-file filename)
+      (error "~s not found" namestring))
+    (cvmload filename)
+    t))
 
 
 ;;; ** TODO: do in lap for now so can move on, but need to figure out why it's so slow.
