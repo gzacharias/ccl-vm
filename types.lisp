@@ -253,7 +253,9 @@ Or maybe have like ivectors and gvectors and only ivectors have complex data.
                (values (logior (ash 1 52) (ash (ldb (byte 20 0) high) 32) low)
                        (- (ldb (byte 11 20) high) 1075)
                        (if (minusp high) -1 1)))))
-  (integer-decode-float float))
+  (multiple-value-bind (mantissa exp sign) (integer-decode-float float)
+    ;; sbcl gives an exponent of 0 for a zero, ccl the -1074 that the bits say.
+    (values mantissa (if (eql mantissa 0) -1074 exp) sign)))
 
 
 (defun ccl-double-float (float &optional result)
@@ -268,6 +270,16 @@ Or maybe have like ivectors and gvectors and only ivectors have complex data.
 
 (defun native-double-float (dfloat)
   (check-type dfloat ccl-double-float)
+  (let ((loword (uvref dfloat 0))
+        (hiword (uvref dfloat 1)))
+    ;; A NaN can't be made by scaling its mantissa (that overflows to an infinity), so make it from its bits.
+    (when (and (eql (ldb (byte 11 20) hiword) #x7ff)
+               (not (and (eql (ldb (byte 20 0) hiword) 0) (eql loword 0))))
+      (return-from native-double-float
+        #+ccl (ccl::double-float-from-bits hiword loword)
+        #+sbcl (sb-kernel:make-double-float (if (logbitp 31 hiword) (- hiword (ash 1 32)) hiword) lo
+word)
+        #-(or ccl sbcl) (error "Don't know how to make a double float")))
   (multiple-value-bind (mantissa exp neg-p) (dfloat-decode (uvref dfloat 0) (uvref dfloat 1))
     (without-fpu-overflow
       ;; scale-float in a stock ccl 1.13 signals an overflow (whatever the fpu mode) when making an infinity.

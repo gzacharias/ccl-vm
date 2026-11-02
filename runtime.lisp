@@ -1290,6 +1290,8 @@
 
 (deflapfunction %short-float-abs (float) (abs float))
 
+(deflapfunction %short-float-negate (float) (- float))
+
 (deflapfunction host-single-float-from-unsigned-byte-32 (u32)
   ;; Do what ccl would do to convert these into standard integer-decode-float values
   ;; then can re-encode them in the host lisp
@@ -1358,6 +1360,11 @@
 (deflapfunction %%double-float-abs! (dfloat result)
   (setf (uvref result 0) (uvref dfloat 0))
   (setf (uvref result 1) (logandc2 (uvref dfloat 1) (ash 1 31)))
+  result)
+
+(deflapfunction %double-float-negate! (dfloat result)
+  (setf (uvref result 0) (uvref dfloat 0))
+  (setf (uvref result 1) (logxor (uvref dfloat 1) (ash 1 31)))
   result)
 
 (deflapfunction %%scale-dfloat! (dfloat int result)
