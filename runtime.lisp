@@ -1276,7 +1276,7 @@
       (check-type mantissa (unsigned-byte 23))
       (logior (if (eql sign -1) (ash 1 31) 0) (ash bexp 23) mantissa))))
 
-(deflapfunction %short-float-sign (float) (< float 0))
+(deflapfunction %short-float-sign (float) (logbitp 31 (lap-single-float-bits float)))
 
 (deflapfunction sfloat-significand-zeros (float)
   (- 23 (integer-length (ldb (byte 23 0) (lap-single-float-bits float)))))
