@@ -277,9 +277,8 @@ Or maybe have like ivectors and gvectors and only ivectors have complex data.
                (not (and (eql (ldb (byte 20 0) hiword) 0) (eql loword 0))))
       (return-from native-double-float
         #+ccl (ccl::double-float-from-bits hiword loword)
-        #+sbcl (sb-kernel:make-double-float (if (logbitp 31 hiword) (- hiword (ash 1 32)) hiword) lo
-word)
-        #-(or ccl sbcl) (error "Don't know how to make a double float")))
+        #+sbcl (sb-kernel:make-double-float (if (logbitp 31 hiword) (- hiword (ash 1 32)) hiword) loword)
+        #-(or ccl sbcl) (error "Don't know how to make a double float"))))
   (multiple-value-bind (mantissa exp neg-p) (dfloat-decode (uvref dfloat 0) (uvref dfloat 1))
     (without-fpu-overflow
       ;; scale-float in a stock ccl 1.13 signals an overflow (whatever the fpu mode) when making an infinity.
