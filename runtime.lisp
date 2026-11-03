@@ -543,6 +543,14 @@
 
 ;; TODO: see if can make this an alist (or hash table) based on the CCL sym rather than the native sym!
 ;;  Only thing is, would need to clear it out any time clear out the package system.
+;; CCL exits the process with _exit or exit.  In the VM that returns from CLOOP instead, with the
+;; exit status, and leaves the host lisp running.
+(defun cvm-exit (status)
+  (throw 'cvm-exit status))
+
+(push (cons "_exit" #'cvm-exit) *known-c-functions-alist*)
+(push (cons "exit" #'cvm-exit) *known-c-functions-alist*)
+
 (defun get-external-fn (sym)
   (let ((name (sym-native-pname sym)))
     (or (cdr (assoc name *known-c-functions-alist* :test 'equal))
@@ -1835,6 +1843,13 @@
   (setq *ccl-toplevel-func* func))
 
 (deflapfunction %no-thread-local-binding-marker () 'no-thread-local-binding-marker)
+
+;; No interrupts in the VM, so the interrupt level is always 0 (as in $BC-INTERRUPT-LEVEL).
+(deflapfunction interrupt-level () 0)
+
+(deflapfunction set-interrupt-level (new)
+  (check-type new fixnum)
+  new)
 
 
 (deflapfunction %frame-backlink (p context)

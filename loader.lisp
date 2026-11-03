@@ -14,13 +14,19 @@
 (defparameter *loading-ccl* nil)
 
 (defun cloop ()
+  "Runs the CCL listener.  Returns the exit status when CCL exits (see CVM-EXIT)."
   (unless *ccl-toplevel-func*
     (error "CCL isn't loaded.  Call ~s first." '(load-ccl "bundle-dir")))
   (let ((*package* *native-package*)) ;; for debugging
     (with-ccl-compiling-setup ()
-      (loop
-        (restart-case (return (ccl-funcall *ccl-toplevel-func*))
-          (restart-cloop () :report (lambda (s) (format s "Restart CVM toplevel"))))))))
+      (catch 'cvm-exit
+        ;; What the kernel's toplevel_loop does: call the thread's toplevel function in a catch of
+        ;; %TOPLEVEL-CATCH%, (TOPLEVEL) throws there, until the toplevel function is NIL.
+        (loop for fn = *ccl-toplevel-func*
+              while fn
+              do (restart-case (catch (sym-value (ccl '%toplevel-catch%))
+                                 (ccl-funcall fn))
+                   (restart-cloop () :report (lambda (s) (format s "Restart CVM toplevel")))))))))
 
 
 ;;; ~5 mins
