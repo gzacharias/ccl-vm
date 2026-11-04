@@ -324,7 +324,7 @@
     collect (%sym-value symv)))
 
 (defun dbind-bind (symbols values)
-  (assert (eq (length symbols) (length values)))
+  (assert (= (length symbols) (length values)))
   (loop for sym in symbols for val in values
     do (setf (sym-value sym) val)))
 
@@ -700,8 +700,10 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defbceval $bc-eq (x y) `(eq ,x ,y))
-(defbceval $bc-ne (x y) `(not (eq ,x ,y)))
+;; CCL's EQ is true of equal fixnums and characters, and ccl code uses EQ on fixnums a lot.
+;; This may not be true on the host: in ABCL they're Java objects and only small ones are cached.
+(defbceval $bc-eq (x y) `(#+abcl eql #-abcl eq ,x ,y))
+(defbceval $bc-ne (x y) `(not (#+abcl eql #-abcl eq ,x ,y)))
 (defbceval $bc-eql (x y) `(lap-eql ,x ,y))
 (defbceval $bc-not (val) `(not ,val))
 (defbceval $bc-yes (val) `(not (null ,val)))

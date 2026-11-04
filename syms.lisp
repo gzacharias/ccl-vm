@@ -186,7 +186,7 @@
 (defconstant pkg.intern-hook 7)
 
 (defun %new-htab (size)
-  (list* (make-uvector subtag-simple-vector (make-array size)) 0 (make-hash-table :test 'equal)))
+  (list* (make-uvector subtag-simple-vector (make-array size :initial-element 0)) 0 (make-hash-table :test 'equal)))
 
 (defun %htab-get (hashkey htab)
   (gethash hashkey (cddr htab)))
@@ -202,7 +202,8 @@
     (let ((vec (gvector-data uvec)))
       (when (eql count (length vec))
         (setf (uvector-data uvec)
-              (setq vec (adjust-array vec  (+ count 100) :initial-element 0))))
+              ;; Not ADJUST-ARRAY: it may return a non-simple array (ECL does), and the data must be a simple-vector.
+              (setq vec (replace (make-array (+ count 100) :initial-element 0) vec))))
       (let ((newpos (position 0 vec)))
         (assert newpos)
         (setf (svref vec newpos) sym)

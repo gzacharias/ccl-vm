@@ -280,7 +280,7 @@
 
 (defun $fs-init-uvector (uvec &rest values)
   (fasl-trace "   ~s ~s ~s" '$fs-init-uvector uvec values)
-  (assert (eq (uvsize uvec) (length values)))
+  (assert (= (uvsize uvec) (length values)))
   (loop for val in values as index upfrom 0
     do (setf (uvref uvec index) (ccl val)))
   uvec)

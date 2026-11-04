@@ -808,10 +808,11 @@
   (setq *next-fake-address* min-object-address)
   (setq *fake-addresses-table* (make-hash-table :test 'eq :size 200
                                                 #+ccl :weak #+ccl t #+ccl :lock-free #+ccl nil
-                                                #+sbcl :weakness #+sbcl :key
+                                                #+(or sbcl abcl ecl clasp) :weakness #+(or sbcl abcl ecl clasp) :key
+                                                #+clisp :weak #+clisp :key
                                                 #+lispworks :weak-kind #+lispworks :key
                                                 #+allegro :weak-keys #+allegro t
-                                                #-(or ccl sbcl lispworks allegro) (error "Need to make a weak hash table"))))
+                                                #-(or ccl sbcl abcl ecl clasp clisp lispworks allegro) (error "Need to make a weak hash table"))))
 
 (deflapfunction strip-tag-to-fixnum (obj)
   (cond ((typep obj 'fixnum) obj)

@@ -1,8 +1,8 @@
 #!/bin/bash
 # usage: vm HOST BUNDLE-DIR [CCL-SOURCE-DIR] < forms
-# Boots the bc bundle in BUNDLE-DIR in ccl-vm, on HOST (sbcl or ccl), and runs the CCL listener
+# Boots the bc bundle in BUNDLE-DIR in ccl-vm, on HOST (sbcl, ccl; experimental: abcl, ecl), and runs the CCL listener
 # on stdin.  CCL-SOURCE-DIR, if given, becomes the VM's "ccl:" directory.
-# Uses $SBCL (default sbcl) or $CCL_HOST as the host lisp.  Exits with CCL's exit status.
+# Uses $SBCL (default sbcl), $CCL_HOST, $ABCL_DIR or $ECL (default ecl) as the host lisp.  Exits with CCL's exit status.
 set -eu
 host=$1
 bundle=$(cd "$2" && pwd)
@@ -17,5 +17,17 @@ case $host in
              --load "$prologue" --eval "(ccl-vm:load-ccl $args)" --eval '(sb-ext:exit :code (ccl-vm:cloop))' ;;
   ccl)  exec "$CCL_HOST" --no-init --batch \
              --load "$prologue" --eval "(ccl-vm:load-ccl $args)" --eval '(ccl:quit (ccl-vm:cloop))' ;;
+  # $ABCL_DIR holds abcl.jar and a jna-*.jar (CFFI's ABCL backend needs JNA).
+  # ABCL's own "interpreter" thread has a fixed 4MB stack, too small for the VM, so run in a thread with 512MB.
+  abcl) exec java -Xmx12g -cp "$ABCL_DIR/abcl.jar:$(ls "$ABCL_DIR"/jna-*.jar | tail -1)" \
+             org.armedbear.lisp.Main --noinit --batch --load "$prologue" \
+             --eval "(let* ((status 1)
+                            (thread (java:jnew \"java.lang.Thread\" java:+null+
+                                      (java:jinterface-implementation \"java.lang.Runnable\" \"run\"
+                                        (lambda () (ccl-vm:load-ccl $args) (setq status (ccl-vm:cloop))))
+                                      \"ccl-vm\" (* 512 1024 1024))))
+                       (java:jcall \"start\" thread) (java:jcall \"join\" thread) (ext:exit :status status))" ;;
+  ecl)  exec ${ECL:-ecl} --norc --lisp-stack 65536 --c-stack 536870912 --heap-size 12884901888 \
+             --load "$prologue" --eval "(ccl-vm:load-ccl $args)" --eval '(ext:quit (ccl-vm:cloop))' ;;
   *)    echo "unknown host $host" >&2; exit 1 ;;
 esac
