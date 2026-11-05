@@ -1,10 +1,12 @@
-# Probe for running bc-compiler on Apple Silicon (gzacharias/ccl#4).  First runs the whole
-# probe (native-probe.yml) on an Intel mac, where everything is known to work, so that a broken
-# workflow fails there instead of wasting a scarce Apple Silicon run.  Only if that passes, runs
-# it on Apple Silicon, for bc-compiler and, as a control, for upstream-base (the upstream ccl
-# it's merged with, which has no bc compiler, so its probe stops after ccl-tests).  Then
-# compares the Intel and Apple Silicon bc bundles, which should be byte-identical.
-# A push to the ci-arm64 branch tests gzacharias/ccl's ci branch.
+# Native-build probe on every platform GitHub offers: builds bc-compiler from the ccl 1.14
+# binaries, makes the bc bundle and tests it (native-probe.yml) on Apple Silicon, x86-64 Linux
+# and arm64 Linux (gzacharias/ccl#4, #7).  First runs the whole probe on an Intel mac, where
+# everything is known to work, so that a broken workflow fails there instead of wasting scarce
+# runs.  Only if that passes, runs the others, plus, as controls, upstream-base (the upstream ccl
+# it's merged with, which has no bc compiler, so its probe stops after ccl-tests) on the two arm64
+# platforms.  Then compares every bc bundle with the Intel one: they should be byte-identical.
+# The overnight suite runs it with workflow_dispatch; a push to the ci-arm64 branch tests
+# gzacharias/ccl's ci branch.
 name: Apple Silicon probe
 
 on:
@@ -37,6 +39,24 @@ jobs:
       strict: false
       label: arm64
 
+  linux-x86:
+    needs: intel
+    uses: ./.github/workflows/native-probe.yml
+    with:
+      runner: ubuntu-latest
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+      strict: false
+      label: linux-x86
+
+  linux-arm64:
+    needs: intel
+    uses: ./.github/workflows/native-probe.yml
+    with:
+      runner: ubuntu-24.04-arm
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+      strict: false
+      label: linux-arm64
+
   arm64-upstream:
     needs: intel
     uses: ./.github/workflows/native-probe.yml
@@ -46,32 +66,47 @@ jobs:
       strict: false
       label: arm64-upstream
 
+  linux-arm64-upstream:
+    needs: intel
+    uses: ./.github/workflows/native-probe.yml
+    with:
+      runner: ubuntu-24.04-arm
+      ccl_ref: upstream-base
+      strict: false
+      label: linux-arm64-upstream
+
   # The bundle is text and shouldn't depend on the machine that compiled it.
   compare:
-    needs: [intel, arm64]
+    needs: [intel, arm64, linux-x86, linux-arm64]
     if: ${{ !cancelled() && needs.intel.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: ccl-bc-*
-      - name: The Apple Silicon bundle must equal the Intel one
+      - name: Every bundle must equal the Intel mac one
         run: |
-          if [ ! -f ccl-bc-arm64/ccl-bc.tar.gz ]; then
-            echo "::error::no Apple Silicon bundle (the arm64 probe didn't get that far)"; exit 1
-          fi
-          mkdir intel arm64
+          mkdir intel
           tar -xzf ccl-bc-intel/ccl-bc.tar.gz -C intel
-          tar -xzf ccl-bc-arm64/ccl-bc.tar.gz -C arm64
-          echo "bc files: intel $(find intel -name '*.bc' | wc -l), arm64 $(find arm64 -name '*.bc' | wc -l)"
-          if diff -r intel arm64 > bundle-diff.txt; then
-            echo "the bundles built on Intel and on Apple Silicon are byte-identical"
-          else
-            grep -c '^diff\|^Only in' bundle-diff.txt || true
-            head -200 bundle-diff.txt
-            echo "::error::the bundles differ (full diff in the bundle-diff artifact)"
-            exit 1
-          fi
+          echo "bc files: intel $(find intel -name '*.bc' | wc -l)"
+          status=0
+          : > bundle-diff.txt
+          for label in arm64 linux-x86 linux-arm64; do
+            if [ ! -f ccl-bc-$label/ccl-bc.tar.gz ]; then
+              echo "::error::no $label bundle (its probe didn't get that far)"; status=1; continue
+            fi
+            mkdir $label
+            tar -xzf ccl-bc-$label/ccl-bc.tar.gz -C $label
+            if diff -r intel $label > diff-$label.txt; then
+              echo "$label: byte-identical to the Intel bundle ($(find $label -name '*.bc' | wc -l) files)"
+            else
+              echo "::error::the $label bundle differs from the Intel one ($(grep -c '^diff\|^Only in' diff-$label.txt) files)"
+              { echo "=== $label"; cat diff-$label.txt; } >> bundle-diff.txt
+              status=1
+            fi
+          done
+          head -200 bundle-diff.txt
+          exit $status
       - if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:

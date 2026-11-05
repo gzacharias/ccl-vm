@@ -1,7 +1,8 @@
-# Reusable workflow, called by arm64-probe.yml: builds bc-compiler natively on one kind of mac,
-# starting from the ccl 1.14 binaries for its architecture, compiles the bc bundle, and tests
-# the result as far as it gets: boots the bundle in ccl-vm on sbcl, runs ccl-tests on the native
-# build, and rebuilds ccl in the VM.  Each step that can still run after a failure does
+# Reusable workflow, called by arm64-probe.yml: builds bc-compiler natively on one kind of
+# machine (macOS or Linux, x86-64 or arm64), starting from the ccl 1.14 binaries for it, compiles
+# the bc bundle, and tests the result as far as it gets: runs ccl-tests on the native build and,
+# on macOS only (ccl-vm doesn't run on Linux yet, gzacharias/ccl#7), boots the bundle in ccl-vm
+# on sbcl and rebuilds ccl in the VM.  Each step that can still run after a failure does
 # (and unless strict, the failure doesn't fail the job), so a single run collects as much as
 # possible.  If the first rebuild fails, boots its boot image in the kernel debugger to see why.
 # Uploads ccl-bc-<label> (the bundle) and logs-<label>; the job summary lists every step's
@@ -43,17 +44,25 @@ jobs:
 
       - name: Install 1.14 bootstrapping binaries
         run: |
-          case $(uname -m) in
-            arm64)  kernel=darm64cl;  tarball=darwinarm64.tar.gz ;;
-            x86_64) kernel=dx86cl64; tarball=darwinx86.tar.gz ;;
-            *)      echo "::error::unknown architecture $(uname -m)"; exit 1 ;;
+          case $(uname -s)-$(uname -m) in
+            Darwin-arm64)  kernel=darm64cl; tarball=darwinarm64.tar.gz ;;
+            Darwin-x86_64) kernel=dx86cl64; tarball=darwinx86.tar.gz ;;
+            Linux-aarch64) kernel=arm64cl;  tarball=linuxarm64.tar.gz ;;
+            Linux-x86_64)  kernel=lx86cl64; tarball=linuxx86.tar.gz ;;
+            *)      echo "::error::unknown platform $(uname -s)-$(uname -m)"; exit 1 ;;
           esac
           echo "KERNEL=$kernel" >> "$GITHUB_ENV"
           curl -sSfL -O https://github.com/Clozure/ccl/releases/download/v1.14/$tarball
           tar -xzf $tarball -C ccl
           {
-            sw_vers; uname -m; sysctl -n hw.ncpu machdep.cpu.brand_string
-            clang --version | head -1; make --version | head -1
+            if [ "$(uname -s)" = Darwin ]; then
+              sw_vers; uname -m; sysctl -n hw.ncpu machdep.cpu.brand_string
+              clang --version | head -1
+            else
+              grep PRETTY_NAME /etc/os-release; uname -m; nproc
+              gcc --version | head -1; m4 --version | head -1
+            fi
+            make --version | head -1
             git -C ccl log -1 --format='ccl %h %s'
             ccl/$kernel -n -b -e '(progn (format t "~&~a~%" (lisp-implementation-version)) (quit))'
           } 2>&1 | tee system.log
@@ -138,14 +147,14 @@ jobs:
           path: ccl-bc.tar.gz
 
       - name: Check out ccl-vm
-        if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && runner.os == 'macOS' }}
         uses: actions/checkout@v4
         with:
           path: ccl-vm
 
       - name: Install sbcl and Quicklisp
         id: hosts
-        if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && runner.os == 'macOS' }}
         run: ccl-vm/.github/ci/install-hosts.sh sbcl
 
       - name: Boot the bundle in the VM (sbcl host)
