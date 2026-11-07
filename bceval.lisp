@@ -263,6 +263,18 @@
 (defbceval $bc-require-simple-string (obj) `(require-type ,obj 'ccl-simple-string))
 (defbceval $bc-require-simple-vector (obj) `(require-type ,obj 'ccl-simple-vector))
 (defbceval $bc-require-u8 (obj) `(require-type ,obj '(unsigned-byte 8)))
+(defbceval $bc-require-s8 (obj) `(require-type ,obj '(signed-byte 8)))
+(defbceval $bc-require-u16 (obj) `(require-type ,obj '(unsigned-byte 16)))
+(defbceval $bc-require-s16 (obj) `(require-type ,obj '(signed-byte 16)))
+(defbceval $bc-require-u32 (obj) `(require-type ,obj '(unsigned-byte 32)))
+(defbceval $bc-require-s32 (obj) `(require-type ,obj '(signed-byte 32)))
+;; 64-bit values can be CCL bignums, which aren't host integers.
+(defbceval $bc-require-u64 (obj) `(require-ccl-integer-type ,obj '(unsigned-byte 64)))
+(defbceval $bc-require-s64 (obj) `(require-ccl-integer-type ,obj '(signed-byte 64)))
+(defun require-ccl-integer-type (obj type)
+  (if (and (typep obj 'ccl-integer) (typep (native-integer obj) type))
+    obj
+    (require-type-out-of-line obj type)))
 
 (defbceval $bc-closed-function (func inh)
   (check-type inh list)
