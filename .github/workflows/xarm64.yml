@@ -1,0 +1,189 @@
+# Cross-compiles a native darwinarm64 (Apple Silicon) ccl on an Intel mac, twice: with native ccl
+# (the control) and in ccl-vm hosted in sbcl.  Then, on Apple Silicon, builds the darwinarm64 kernel
+# from the same sources, boots each boot image, saves a full image and runs ccl-tests on it, and
+# compares the two cross-compiles' fasls and boot images.
+name: Cross-compile to darwinarm64
+
+on:
+  workflow_dispatch:
+    inputs:
+      ccl_ref:
+        description: "gzacharias/ccl branch, tag or commit to build"
+        default: ci
+  # A new workflow can only be dispatched once it's on the default branch; a push works anywhere.
+  push:
+    branches: [ci-xarm64]
+
+permissions:
+  contents: read
+
+env:
+  ARM64_RELEASE: https://github.com/Clozure/ccl/releases/download/v1.14/darwinarm64.tar.gz
+
+jobs:
+  bundle:
+    uses: ./.github/workflows/bundle.yml
+    with:
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+
+  # The cross-compile's forms run in the CCL package (cross-compile-ccl etc. aren't exported).
+  native-xc:
+    needs: bundle
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ccl-native
+      - name: Unpack the native build and the darwinarm64 interface headers
+        run: |
+          tar -xzf ccl-native.tar.gz
+          curl -sSfL $ARM64_RELEASE | tar -xz -C ccl darwin-arm64-headers
+      - name: Cross-compile with native ccl
+        working-directory: ccl
+        run: |
+          ./dx86cl64 -n -b > ../xc.log 2>&1 <<'EOF' || true
+          (in-package "CCL")
+          (progn
+            (load "ccl:tools;xdarwinarm64.lisp")
+            (let ((*warn-if-redefine-kernel* nil))
+              (cross-compile-ccl :darwinarm64 t)
+              (cross-xload-level-0 :darwinarm64 :force))
+            (format t "~&XC-DONE~%"))
+          EOF
+          tail -40 ../xc.log
+          grep -qx XC-DONE ../xc.log
+          ls -l arm64-boot.image
+          echo "da64fsl files: $(find . -name '*.da64fsl' | wc -l)"
+      - name: Pack the cross-compiled tree
+        run: tar -czf xtree.tar.gz --exclude .git --exclude '*.dx64fsl' --exclude ccl-bc ccl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xtree-native
+          path: xtree.tar.gz
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-native-xc
+          path: "*.log"
+
+  vm-xc:
+    needs: bundle
+    runs-on: macos-15-intel
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ccl-vm
+      - name: Check out the sources to cross-compile
+        uses: actions/checkout@v4
+        with:
+          repository: gzacharias/ccl
+          ref: ${{ inputs.ccl_ref || 'ci' }}
+          path: ccl
+          fetch-depth: 0               # tags, for the version string
+      - uses: actions/download-artifact@v4
+        with:
+          name: ccl-bc
+      - name: Install sbcl and Quicklisp
+        run: ccl-vm/.github/ci/install-hosts.sh sbcl
+      - name: Unpack the darwinarm64 interface headers
+        run: curl -sSfL $ARM64_RELEASE | tar -xz -C ccl darwin-arm64-headers
+      - name: Cross-compile in the VM (sbcl host)
+        run: |
+          ccl-vm/.github/ci/vm sbcl ccl-bc ccl > xc.log 2>&1 <<'EOF' || true
+          (progn
+            (load "ccl:tools;xdarwinarm64.lisp")
+            (let ((*warn-if-redefine-kernel* nil))
+              (cross-compile-ccl :darwinarm64 t)
+              (cross-xload-level-0 :darwinarm64 :force))
+            (format t "~&XC-DONE~%"))
+          EOF
+          tail -40 xc.log
+          grep -qx XC-DONE xc.log
+          ls -l ccl/arm64-boot.image
+          echo "da64fsl files: $(find ccl -name '*.da64fsl' | wc -l)"
+      - name: Pack the cross-compiled tree
+        run: tar -czf xtree.tar.gz --exclude .git ccl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xtree-vm
+          path: xtree.tar.gz
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-vm-xc
+          path: "*.log"
+
+  boot:
+    needs: [native-xc, vm-xc]
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [native, vm]
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - id: get
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: xtree-${{ matrix.source }}
+      - name: Build the darwinarm64 kernel from the same sources
+        if: ${{ steps.get.outcome == 'success' }}
+        run: |
+          tar -xzf xtree.tar.gz
+          make -C ccl/lisp-kernel/darwinarm64 > kernel.log 2>&1 || { tail -40 kernel.log; exit 1; }
+          ls -l ccl/darm64cl
+      - name: Boot the boot image and save a full image
+        if: ${{ steps.get.outcome == 'success' }}
+        working-directory: ccl
+        run: |
+          echo '(save-application "darm64cl.image")' | ./darm64cl --image-name arm64-boot.image --no-init --batch > ../boot.log 2>&1 || true
+          tail -40 ../boot.log
+          ./darm64cl -n -b -e '(progn (format t "~&XC-BOOT-OK ~a~%" (lisp-implementation-version)) (quit))' | tee -a ../boot.log
+          grep -q '^XC-BOOT-OK' ../boot.log
+      - name: Check out ccl-tests
+        if: ${{ steps.get.outcome == 'success' }}
+        uses: actions/checkout@v4
+        with:
+          repository: Clozure/ccl-tests
+          path: ccl-tests
+      - name: Run ccl-tests on the cross-compiled image
+        if: ${{ steps.get.outcome == 'success' }}
+        timeout-minutes: 60
+        working-directory: ccl-tests
+        run: |
+          status=0
+          make CCL=../ccl/darm64cl > ../ccl-tests.log 2>&1 || status=$?
+          tail -40 ../ccl-tests.log
+          exit $status
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-boot-${{ matrix.source }}
+          path: "*.log"
+
+  # The two cross-compiles should produce the same fasls and boot image.
+  compare:
+    needs: [native-xc, vm-xc]
+    if: ${{ !cancelled() && needs.native-xc.result == 'success' && needs.vm-xc.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: xtree-*
+      - name: The VM's cross-compile must equal the native one
+        run: |
+          for s in native vm; do mkdir $s; tar -xzf xtree-$s/xtree.tar.gz -C $s; done
+          status=0
+          cmp native/ccl/arm64-boot.image vm/ccl/arm64-boot.image && echo "boot images are byte-identical" || { echo "::error::the boot images differ"; status=1; }
+          (cd native/ccl && find . -name '*.da64fsl' | sort) > native.list
+          (cd vm/ccl && find . -name '*.da64fsl' | sort) > vm.list
+          diff native.list vm.list > list.diff || { echo "::error::different sets of da64fsl files"; cat list.diff; status=1; }
+          ndiff=0
+          while read f; do cmp -s native/ccl/$f vm/ccl/$f || { echo "differs: $f"; ndiff=$((ndiff+1)); }; done < native.list
+          echo "da64fsl files: $(wc -l < native.list), differing: $ndiff"
+          [ $ndiff = 0 ] || status=1
+          exit $status
