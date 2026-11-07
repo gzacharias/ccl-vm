@@ -83,6 +83,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: "*-bundle-*"
+      - uses: actions/download-artifact@v4
+        with:
           pattern: ccl-bc-*
       - name: Every bundle must equal the Intel mac one
         run: |
@@ -105,6 +108,22 @@ jobs:
               status=1
             fi
           done
+          # The bundle CCL rebuilds inside the VM shouldn't depend on the machine the VM runs on either.
+          if [ -f vm-bundle-intel/vm-bundle.tar.gz ] && [ -f vm-bundle-arm64/vm-bundle.tar.gz ]; then
+            mkdir vm-intel vm-arm64
+            tar -xzf vm-bundle-intel/vm-bundle.tar.gz -C vm-intel
+            tar -xzf vm-bundle-arm64/vm-bundle.tar.gz -C vm-arm64
+            if diff -r vm-intel vm-arm64 > diff-vm.txt; then
+              echo "VM-rebuilt bundles: Apple Silicon byte-identical to Intel ($(find vm-arm64 -name '*.bc' | wc -l) files)"
+            else
+              echo "::error::the bundle rebuilt in the VM on Apple Silicon differs from the Intel one ($(grep -c '^diff\|^Only in' diff-vm.txt) files)"
+              { echo "=== VM-rebuilt, arm64 vs intel"; cat diff-vm.txt; } >> bundle-diff.txt
+              status=1
+            fi
+          else
+            echo "::error::missing a VM-rebuilt bundle (intel: $([ -f vm-bundle-intel/vm-bundle.tar.gz ] && echo yes || echo no), arm64: $([ -f vm-bundle-arm64/vm-bundle.tar.gz ] && echo yes || echo no))"
+            status=1
+          fi
           head -200 bundle-diff.txt
           exit $status
       - if: ${{ failure() }}

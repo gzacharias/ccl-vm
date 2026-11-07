@@ -5,7 +5,8 @@
 # on sbcl and rebuilds ccl in the VM.  Each step that can still run after a failure does
 # (and unless strict, the failure doesn't fail the job), so a single run collects as much as
 # possible.  If the first rebuild fails, boots its boot image in the kernel debugger to see why.
-# Uploads ccl-bc-<label> (the bundle) and logs-<label>; the job summary lists every step's
+# Uploads ccl-bc-<label> (the bundle), vm-bundle-<label> (the bundle rebuilt in the VM, macOS only)
+# and logs-<label>; the job summary lists every step's
 # outcome.
 name: Native build probe
 
@@ -190,6 +191,16 @@ jobs:
         continue-on-error: ${{ !inputs.strict }}
         timeout-minutes: 60
         run: ccl-vm/.github/ci/vm-rebuild.sh sbcl ccl-bc vm-rebuild
+
+      - name: Pack the VM-rebuilt bundle
+        if: ${{ !cancelled() && steps.vm-rebuild.outcome == 'success' }}
+        run: tar -czf vm-bundle.tar.gz vm-rebuild
+
+      - if: ${{ !cancelled() && steps.vm-rebuild.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vm-bundle-${{ inputs.label }}
+          path: vm-bundle.tar.gz
 
       - name: Summary
         if: ${{ always() }}
