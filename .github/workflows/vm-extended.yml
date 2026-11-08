@@ -36,15 +36,15 @@ jobs:
     needs: bundle
     runs-on: macos-15-intel
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: ccl-vm
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: gzacharias/ccl
           ref: ${{ env.CCL_REF }}
           path: ccl
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ccl-bc
       - name: Install sbcl and Quicklisp
@@ -65,14 +65,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: tar -czf vm-bundle-sbcl.tar.gz gen1
       - if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vm-bundle-sbcl
           path: vm-bundle-sbcl.tar.gz
 
       - name: Keep the logs
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: steady-state-logs
           path: "*.log"
@@ -81,15 +81,15 @@ jobs:
     needs: bundle
     runs-on: macos-15-intel
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: ccl-vm
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: gzacharias/ccl
           ref: ${{ env.CCL_REF }}
           path: ccl
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ccl-bc
       - name: Install ccl 1.14 and Quicklisp
@@ -100,14 +100,14 @@ jobs:
 
       - name: Save the result, for the cross-host comparison
         run: tar -czf vm-bundle-ccl.tar.gz vm-bundle-ccl
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: vm-bundle-ccl
           path: vm-bundle-ccl.tar.gz
 
       - name: Keep the logs
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ccl-host-rebuild-logs
           path: "*.log"
@@ -117,7 +117,7 @@ jobs:
     needs: [steady-state, ccl-host-rebuild]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: vm-bundle-*
           merge-multiple: true
@@ -131,16 +131,16 @@ jobs:
     needs: bundle
     runs-on: macos-15-intel
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: ccl-vm
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: gzacharias/ccl
           ref: ${{ env.CCL_REF }}
           path: ccl
           fetch-depth: 0               # full history and tags, so `git describe` works for the version string
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ccl-bc
       - name: Install ccl 1.14 and Quicklisp
@@ -151,7 +151,7 @@ jobs:
 
       - name: Keep the logs
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ccl-host-cross-compile-logs
           path: "*.log"

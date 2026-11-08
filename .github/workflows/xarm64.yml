@@ -32,7 +32,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ccl-native
       - name: Unpack the native build and the darwinarm64 interface headers
@@ -57,12 +57,12 @@ jobs:
           echo "da64fsl files: $(find . -name '*.da64fsl' | wc -l)"
       - name: Pack the cross-compiled tree
         run: tar -czf xtree.tar.gz --exclude .git --exclude '*.dx64fsl' --exclude ccl-bc ccl
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: xtree-native
           path: xtree.tar.gz
       - if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: logs-native-xc
           path: "*.log"
@@ -72,17 +72,17 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: ccl-vm
       - name: Check out the sources to cross-compile
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: gzacharias/ccl
           ref: ${{ inputs.ccl_ref || 'ci' }}
           path: ccl
           fetch-depth: 0               # tags, for the version string
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ccl-bc
       - name: Install sbcl and Quicklisp
@@ -105,12 +105,12 @@ jobs:
           echo "da64fsl files: $(find ccl -name '*.da64fsl' | wc -l)"
       - name: Pack the cross-compiled tree
         run: tar -czf xtree.tar.gz --exclude .git ccl
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: xtree-vm
           path: xtree.tar.gz
       - if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: logs-vm-xc
           path: "*.log"
@@ -127,7 +127,7 @@ jobs:
     steps:
       - id: get
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: xtree-${{ matrix.source }}
       - name: Build the darwinarm64 kernel from the same sources
@@ -146,7 +146,7 @@ jobs:
           grep -q '^XC-BOOT-OK' ../boot.log
       - name: Check out ccl-tests
         if: ${{ steps.get.outcome == 'success' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Clozure/ccl-tests
           path: ccl-tests
@@ -160,7 +160,7 @@ jobs:
           tail -40 ../ccl-tests.log
           exit $status
       - if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: logs-boot-${{ matrix.source }}
           path: "*.log"
@@ -171,7 +171,7 @@ jobs:
     if: ${{ !cancelled() && needs.native-xc.result == 'success' && needs.vm-xc.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: xtree-*
       # Known difference (gzacharias/ccl-vm#13): native fasls use the "-special" symbol opcodes for

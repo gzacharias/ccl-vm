@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 240
     steps:
       - name: Check out bc-compiler
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: gzacharias/ccl
           ref: ${{ inputs.ccl_ref }}
@@ -143,14 +143,14 @@ jobs:
           tar -czf ../ccl-bc.tar.gz ccl-bc
 
       - if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ccl-bc-${{ inputs.label }}
           path: ccl-bc.tar.gz
 
       - name: Check out ccl-vm
         if: ${{ !cancelled() && steps.bundle.outcome == 'success' && runner.os == 'macOS' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: ccl-vm
 
@@ -167,7 +167,7 @@ jobs:
 
       - name: Check out ccl-tests
         if: ${{ !cancelled() && steps.build2.outcome == 'success' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Clozure/ccl-tests
           path: ccl-tests
@@ -198,7 +198,7 @@ jobs:
         run: tar -czf vm-bundle.tar.gz vm-rebuild
 
       - if: ${{ !cancelled() && steps.vm-rebuild.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vm-bundle-${{ inputs.label }}
           path: vm-bundle.tar.gz
@@ -221,7 +221,7 @@ jobs:
 
       - name: Keep the logs
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: logs-${{ inputs.label }}
           path: "*.log"

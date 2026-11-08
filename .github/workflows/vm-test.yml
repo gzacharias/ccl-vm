@@ -41,7 +41,7 @@ jobs:
     needs: bundle
     runs-on: macos-15-intel
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ccl-native
 
@@ -49,7 +49,7 @@ jobs:
         run: tar -xzf ccl-native.tar.gz
 
       - name: Check out ccl-tests
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Clozure/ccl-tests
           path: ccl-tests
@@ -63,20 +63,20 @@ jobs:
     runs-on: macos-15-intel
     steps:
       - name: Check out ccl-vm
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: ccl-vm
 
       - name: Check out ccl sources (for rebuild and cross-compile)
         if: ${{ github.event_name == 'push' || inputs.vm_rebuild || inputs.cross_compile }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: gzacharias/ccl
           ref: ${{ env.CCL_REF }}
           path: ccl
           fetch-depth: 0               # full history and tags, so `git describe` works for the version string
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ccl-bc
 
@@ -100,7 +100,7 @@ jobs:
 
       - name: Keep the logs
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vm-logs
           path: "*.log"
