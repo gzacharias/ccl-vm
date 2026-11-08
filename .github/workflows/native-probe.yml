@@ -131,6 +131,7 @@ jobs:
         working-directory: ccl
         run: |
           ./$KERNEL -n -b > ../bc.log 2>&1 <<'EOF' || true
+          (load "ccl:tools;xdarwincvm.lisp")
           (progn
             (ccl:bc-compile-ccl :force t :output "ccl:ccl-bc;")
             (format t "~&BC-DONE~%"))
