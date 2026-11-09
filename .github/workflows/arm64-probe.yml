@@ -124,6 +124,22 @@ jobs:
             echo "::error::missing a VM-rebuilt bundle (intel: $([ -f vm-bundle-intel/vm-bundle.tar.gz ] && echo yes || echo no), arm64: $([ -f vm-bundle-arm64/vm-bundle.tar.gz ] && echo yes || echo no))"
             status=1
           fi
+          # Same for the bundle rebuilt in the VM hosted in ccl on Apple Silicon.
+          if [ -f vm-bundle-intel/vm-bundle.tar.gz ] && [ -f vm-bundle-ccl-arm64/vm-bundle-ccl.tar.gz ]; then
+            mkdir -p vm-intel vm-ccl-arm64
+            [ -d vm-intel/vm-rebuild ] || tar -xzf vm-bundle-intel/vm-bundle.tar.gz -C vm-intel
+            tar -xzf vm-bundle-ccl-arm64/vm-bundle-ccl.tar.gz -C vm-ccl-arm64
+            if diff -r vm-intel/vm-rebuild vm-ccl-arm64/vm-rebuild-ccl > diff-vm-ccl.txt; then
+              echo "VM-rebuilt bundles: ccl host on Apple Silicon byte-identical to Intel ($(find vm-ccl-arm64 -name '*.bc' | wc -l) files)"
+            else
+              echo "::error::the bundle rebuilt in the VM hosted in ccl on Apple Silicon differs from the Intel one ($(grep -c '^diff\|^Only in' diff-vm-ccl.txt) files)"
+              { echo "=== VM-rebuilt, ccl host on arm64 vs intel"; cat diff-vm-ccl.txt; } >> bundle-diff.txt
+              status=1
+            fi
+          else
+            echo "::error::missing a VM-rebuilt bundle (intel: $([ -f vm-bundle-intel/vm-bundle.tar.gz ] && echo yes || echo no), ccl host on arm64: $([ -f vm-bundle-ccl-arm64/vm-bundle-ccl.tar.gz ] && echo yes || echo no))"
+            status=1
+          fi
           head -200 bundle-diff.txt
           exit $status
       - if: ${{ failure() }}

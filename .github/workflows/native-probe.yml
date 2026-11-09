@@ -1,11 +1,12 @@
 # Reusable workflow, called by arm64-probe.yml: builds bc-compiler natively on one kind of
 # machine (macOS or Linux, x86-64 or arm64), starting from the ccl 1.14 binaries for it, compiles
 # the bc bundle, and tests the result as far as it gets: runs ccl-tests on the native build and,
-# on macOS only (ccl-vm doesn't run on Linux yet, gzacharias/ccl#7), boots the bundle in ccl-vm
-# on sbcl and rebuilds ccl in the VM.  Each step that can still run after a failure does
+# on macOS only (ccl-vm doesn't run on Linux yet, ccl-vm#14), boots the bundle in ccl-vm
+# on sbcl (and on Apple Silicon also on ccl) and rebuilds ccl in the VM.  Each step that can still run after a failure does
 # (and unless strict, the failure doesn't fail the job), so a single run collects as much as
 # possible.  If the first rebuild fails, boots its boot image in the kernel debugger to see why.
-# Uploads ccl-bc-<label> (the bundle), vm-bundle-<label> (the bundle rebuilt in the VM, macOS only)
+# Uploads ccl-bc-<label> (the bundle), vm-bundle-<label> (the bundle rebuilt in the VM, macOS only;
+# vm-bundle-ccl-<label> with the ccl host, Apple Silicon only)
 # and logs-<label>; the job summary lists every step's
 # outcome.
 name: Native build probe
@@ -154,16 +155,23 @@ jobs:
         with:
           path: ccl-vm
 
-      - name: Install sbcl and Quicklisp
+      # On Apple Silicon, ccl is a VM host too (on Intel, vm-test.yml covers the ccl host).
+      - name: Install sbcl (and on Apple Silicon ccl) and Quicklisp
         id: hosts
         if: ${{ !cancelled() && steps.bundle.outcome == 'success' && runner.os == 'macOS' }}
-        run: ccl-vm/.github/ci/install-hosts.sh sbcl
+        run: ccl-vm/.github/ci/install-hosts.sh sbcl ${{ runner.arch == 'ARM64' && 'ccl' || '' }}
 
       - name: Boot the bundle in the VM (sbcl host)
         id: smoke
         if: ${{ !cancelled() && steps.hosts.outcome == 'success' }}
         continue-on-error: ${{ !inputs.strict }}
         run: ccl-vm/.github/ci/vm-smoke.sh sbcl
+
+      - name: Boot the bundle in the VM (ccl host)
+        id: smoke-ccl
+        if: ${{ !cancelled() && steps.hosts.outcome == 'success' && runner.arch == 'ARM64' }}
+        continue-on-error: ${{ !inputs.strict }}
+        run: ccl-vm/.github/ci/vm-smoke.sh ccl
 
       - name: Check out ccl-tests
         if: ${{ !cancelled() && steps.build2.outcome == 'success' }}
@@ -203,6 +211,23 @@ jobs:
           name: vm-bundle-${{ inputs.label }}
           path: vm-bundle.tar.gz
 
+      - name: rebuild-ccl inside the VM (ccl host)
+        id: vm-rebuild-ccl
+        if: ${{ !cancelled() && steps.smoke-ccl.outcome == 'success' }}
+        continue-on-error: ${{ !inputs.strict }}
+        timeout-minutes: 120
+        run: ccl-vm/.github/ci/vm-rebuild.sh ccl ccl-bc vm-rebuild-ccl
+
+      - name: Pack the bundle rebuilt in the VM on ccl
+        if: ${{ !cancelled() && steps.vm-rebuild-ccl.outcome == 'success' }}
+        run: tar -czf vm-bundle-ccl.tar.gz vm-rebuild-ccl
+
+      - if: ${{ !cancelled() && steps.vm-rebuild-ccl.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: vm-bundle-ccl-${{ inputs.label }}
+          path: vm-bundle-ccl.tar.gz
+
       - name: Summary
         if: ${{ always() }}
         run: |
@@ -215,8 +240,10 @@ jobs:
             echo "| second rebuild | ${{ steps.build2.outcome }} |"
             echo "| bc bundle | ${{ steps.bundle.outcome }} |"
             echo "| boot bundle in VM | ${{ steps.smoke.outcome }} |"
+            echo "| boot bundle in VM (ccl host) | ${{ steps.smoke-ccl.outcome }} |"
             echo "| ccl-tests | ${{ steps.ccl-tests.outcome }} |"
             echo "| rebuild-ccl in VM | ${{ steps.vm-rebuild.outcome }} |"
+            echo "| rebuild-ccl in VM (ccl host) | ${{ steps.vm-rebuild-ccl.outcome }} |"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Keep the logs
