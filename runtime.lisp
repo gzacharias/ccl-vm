@@ -681,7 +681,9 @@
               do (setq hash (logand #xFFFFFFFF (+ hash digit))))
       (loop for digit across vec
         do (setq hash (logand #xFFFFFFFF (+ digit (ash hash 13))))))
-    #+ccl (let ((native (ccl::%bignum-hash (native-integer bignum))))
+    ;; Check against the host's own %bignum-hash, which only uses the same algorithm on x86-64
+    ;; (arm64's is different).
+    #+(and ccl x86-64) (let ((native (ccl::%bignum-hash (native-integer bignum))))
             (unless (eql hash native)
               (break "mismatched hash for ~s: us ~s ccl ~s" bignum hash native)))
     hash))
@@ -861,7 +863,8 @@
     ;;; TODO: remove
     ;; ash shift LEFT
     ;; Values as they appear in registers
-    #+ccl
+    ;; This models the x86-64 version, so only check against the host's on x86-64.
+    #+(and ccl x86-64)
     (let ((cres (ccl::fast-mod-3 number divisor recip)))
       (unless (eq res cres)
         (break "fast-mod-3 ~s ~s ~s our ~s ccl ~s"
@@ -953,10 +956,14 @@
   (whence :int))
 
 
-(cffi:defcfun (ff-open "open") :int
-  (path :pointer)
-  (flag :int)
-  (mode :uint16))
+;; open's mode argument is variadic, and arm64 macOS passes variadic arguments on the stack, so calling
+;; open as a fixed 3-argument function passes it a garbage mode (files created read-only, "Permission
+;; denied" when they're reopened).  CCL calls open through its kernel's lisp_open wrapper for this
+;; reason, so in a CCL host use that too; CFFI's CCL backend doesn't support varargs.
+(defun ff-open (path flag mode)
+  #+ccl (ccl::ff-call (ccl::%kernel-import target::kernel-import-lisp-open)
+                      :address path :signed-fullword flag :unsigned-fullword mode :signed-fullword)
+  #-ccl (cffi:foreign-funcall-varargs "open" (:pointer path :int flag) :unsigned-int mode :int))
 
 (cffi:defcfun (ff-close "close") :int
   (fd :int))
