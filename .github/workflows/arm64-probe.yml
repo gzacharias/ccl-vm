@@ -81,9 +81,24 @@ jobs:
     if: ${{ !cancelled() && needs.intel.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
+      # One download per VM-rebuilt bundle, each into its own directory: with a pattern that happens
+      # to match just one artifact, download-artifact unpacks it at the top level instead.  A bundle
+      # that's missing (its step failed) is reported below.
       - uses: actions/download-artifact@v8
+        continue-on-error: true
         with:
-          pattern: "*-bundle-*"
+          name: vm-bundle-intel
+          path: vm-bundle-intel
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: vm-bundle-arm64
+          path: vm-bundle-arm64
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: vm-bundle-ccl-arm64
+          path: vm-bundle-ccl-arm64
       - uses: actions/download-artifact@v8
         with:
           pattern: ccl-bc-*
