@@ -160,7 +160,12 @@
                       (let (#+ccl(ccl::*known-backends* (remove (pathname-type file) ccl::*known-backends*
                                                                 :key (lambda (b)
                                                                        (pathname-type (ccl::backend-target-fasl-pathname b)))
-                                                                :test 'equal)))
+                                                                :test 'equal))
+                            (*readtable* (with-standard-io-syntax *readtable*))
+                            (*read-base* 10)
+                            (*read-default-float-format* 'single-float)
+                            (*read-eval* nil)
+                            (*read-suppress* nil))
                         (load file))
                     (%set-sym-value (ccl'*package*) cur-pkg)
                     (%set-sym-value (ccl'*readable*) cur-rdtable) cur-rdtable)))
