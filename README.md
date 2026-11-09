@@ -95,13 +95,13 @@ On GitHub's Intel macOS runners this takes about 10 minutes hosted in SBCL, abou
 
 ## State of the project
 
-Currently the virtual machine, hosted in either SBCL or CCL, has reached the following milestones:
+Currently the virtual machine, hosted in any combination of sbcl/ccl, arm64/x8664, MacOS/Linux, has reached the following milestones:
 
 * It can boot up and run the CCL REPL, though only with limited error handling.
 
-* It can run (rebuild-ccl :clean t) to produce a new set of .bc files, boot from it and run rebuild-ccl again and produce the same result.  It produces the same .bc files whether it's hosted in SBCL or CCL.
+* It can run (rebuild-ccl :clean t) to produce a new set of .bc files, boot from it and run rebuild-ccl again and produce the same result.  It produces the same .bc files on any of the 8 supported host combinations.
 
-* It can also cross-compile a native ccl: it builds a darwinx8664 (Intel macOS) bootstrapping image, which the native kernel boots into a working CCL, as described above.  The support for cross-compiling to native is still very kludgy.
+* It can also cross-compile a native ccl: it builds a darwinx8664 (Intel macOS) bootstrapping image, which the native kernel boots into a working CCL, as described above.
 
 Functionality outside what is needed to compile or cross compile CCL hasn't been tested.
 
