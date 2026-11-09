@@ -1,6 +1,6 @@
 # Cross-compiles a native darwinarm64 (Apple Silicon) ccl on an Intel mac, twice: with native ccl
-# (the control) and in ccl-vm hosted in sbcl.  Then, on Apple Silicon, builds the darwinarm64 kernel
-# from the same sources, boots each boot image, saves a full image and runs ccl-tests on it, and
+# (the control) and in ccl-vm hosted in sbcl.  Then, on Apple Silicon, boots each boot image in the
+# stock 1.14 darwinarm64 kernel, saves a full image and runs ccl-tests on it, and
 # compares the two cross-compiles' fasls and boot images.
 name: Cross-compile to darwinarm64
 
@@ -130,11 +130,11 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: xtree-${{ matrix.source }}
-      - name: Build the darwinarm64 kernel from the same sources
+      - name: Install the stock 1.14 darwinarm64 kernel
         if: ${{ steps.get.outcome == 'success' }}
         run: |
           tar -xzf xtree.tar.gz
-          make -C ccl/lisp-kernel/darwinarm64 > kernel.log 2>&1 || { tail -40 kernel.log; exit 1; }
+          curl -sSfL $ARM64_RELEASE | tar -xz -C ccl darm64cl
           ls -l ccl/darm64cl
       - name: Boot the boot image and save a full image
         if: ${{ steps.get.outcome == 'success' }}

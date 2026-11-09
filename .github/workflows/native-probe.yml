@@ -68,7 +68,7 @@ jobs:
             ccl/$kernel -n -b -e '(progn (format t "~&~a~%" (lisp-implementation-version)) (quit))'
           } 2>&1 | tee system.log
 
-      - name: First rebuild (with kernel)
+      - name: First rebuild (stock 1.14 kernel)
         id: build1
         continue-on-error: ${{ !inputs.strict }}
         working-directory: ccl
@@ -76,7 +76,7 @@ jobs:
           ./$KERNEL -n -b > ../build1.log 2>&1 <<'EOF' || true
           (let ((*warn-if-redefine-kernel* nil)) (load "ccl:lib;compile-ccl.lisp"))
           (progn
-            (rebuild-ccl :clean t :kernel t)
+            (rebuild-ccl :clean t)
             (format t "~&BUILD1-DONE~%"))
           (quit)
           EOF

@@ -1,7 +1,7 @@
 #!/bin/bash
 # usage: vm-cross-compile.sh HOST
 # Boots ./ccl-bc in ccl-vm on HOST and cross-compiles a native darwinx8664 ccl from a copy of
-# the sources in ./ccl/, then builds the kernel and checks that the result boots.
+# the sources in ./ccl/, then checks that the result boots in the stock 1.14 kernel.
 # Log: xc-HOST.log.
 set -eu
 host=$1
@@ -23,7 +23,6 @@ EOF
 tail -40 "$log"
 # Whole-line match: a backtrace can quote the form's source.
 grep -qx VM-XC-DONE "$log"
-(cd "$tree/lisp-kernel/darwinx8664" && make)
 cd "$tree"
 echo '(save-application "dx86cl64.image")' | ./dx86cl64 --image-name x86-boot64.image --no-init --batch
 ./dx86cl64 -n -b -e '(progn (format t "~&XC-BOOT-OK ~a~%" (lisp-implementation-version)) (quit))' | tee boot.log

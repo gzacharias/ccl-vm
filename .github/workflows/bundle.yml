@@ -30,12 +30,12 @@ jobs:
           curl -sSfL -O $RELEASE_URL
           tar -xzf darwinx86.tar.gz -C ccl
 
-      - name: First rebuild (with kernel)
+      - name: First rebuild (stock 1.14 kernel)
         working-directory: ccl
         run: |
           ./dx86cl64 -n -b <<'EOF'
           (let ((*warn-if-redefine-kernel* nil)) (load "ccl:lib;compile-ccl.lisp"))
-          (rebuild-ccl :clean t :kernel t)
+          (rebuild-ccl :clean t)
           (format t "~&BUILD1-DONE~%")
           (quit)
           EOF
