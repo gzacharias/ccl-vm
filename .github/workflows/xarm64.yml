@@ -1,7 +1,7 @@
-# Cross-compiles a native darwinarm64 (Apple Silicon) ccl on an Intel mac, twice: with native ccl
-# (the control) and in ccl-vm hosted in sbcl.  Then, on Apple Silicon, boots each boot image in the
-# stock 1.14 darwinarm64 kernel, saves a full image and runs ccl-tests on it, and
-# compares the two cross-compiles' fasls and boot images.
+# Cross-compiles a native darwinarm64 (Apple Silicon) ccl on an Intel mac, three times: with native
+# ccl (the control) and in ccl-vm hosted in sbcl and in ccl.  Then, on Apple Silicon, boots each boot
+# image in the stock 1.14 darwinarm64 kernel, saves a full image and runs ccl-tests on it, and
+# compares the cross-compiles' fasls and boot images.
 name: Cross-compile to darwinarm64
 
 on:
@@ -69,8 +69,12 @@ jobs:
 
   vm-xc:
     needs: bundle
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [sbcl, ccl]
     runs-on: macos-15-intel
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
         with:
@@ -85,13 +89,13 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: ccl-bc
-      - name: Install sbcl and Quicklisp
-        run: ccl-vm/.github/ci/install-hosts.sh sbcl
+      - name: Install ${{ matrix.host }} and Quicklisp
+        run: ccl-vm/.github/ci/install-hosts.sh ${{ matrix.host }}
       - name: Unpack the darwinarm64 interface headers
         run: curl -sSfL $ARM64_RELEASE | tar -xz -C ccl darwin-arm64-headers
-      - name: Cross-compile in the VM (sbcl host)
+      - name: Cross-compile in the VM (${{ matrix.host }} host)
         run: |
-          ccl-vm/.github/ci/vm sbcl ccl-bc ccl > xc.log 2>&1 <<'EOF' || true
+          ccl-vm/.github/ci/vm ${{ matrix.host }} ccl-bc ccl > xc.log 2>&1 <<'EOF' || true
           (progn
             (load "ccl:tools;xdarwinarm64.lisp")
             (let ((*warn-if-redefine-kernel* nil))
@@ -107,12 +111,12 @@ jobs:
         run: tar -czf xtree.tar.gz --exclude .git ccl
       - uses: actions/upload-artifact@v7
         with:
-          name: xtree-vm
+          name: xtree-vm-${{ matrix.host }}
           path: xtree.tar.gz
       - if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: logs-vm-xc
+          name: logs-vm-xc-${{ matrix.host }}
           path: "*.log"
 
   boot:
@@ -121,7 +125,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        source: [native, vm]
+        source: [native, vm-sbcl, vm-ccl]
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
@@ -165,7 +169,7 @@ jobs:
           name: logs-boot-${{ matrix.source }}
           path: "*.log"
 
-  # The two cross-compiles should produce the same fasls and boot image.
+  # The cross-compiles should produce the same fasls and boot image.
   compare:
     needs: [native-xc, vm-xc]
     if: ${{ !cancelled() && needs.native-xc.result == 'success' && needs.vm-xc.result == 'success' }}
@@ -179,7 +183,8 @@ jobs:
       # differences are reported as warnings; a different set of fasls fails.
       - name: Compare the VM's cross-compile with the native one
         run: |
-          for s in native vm; do mkdir $s; tar -xzf xtree-$s/xtree.tar.gz -C $s; done
+          for s in native vm-sbcl vm-ccl; do mkdir $s; tar -xzf xtree-$s/xtree.tar.gz -C $s; done
+          rm -rf vm; mv vm-sbcl vm
           status=0
           cmp -s native/ccl/arm64-boot.image vm/ccl/arm64-boot.image && echo "boot images are byte-identical" || echo "::warning::the boot images differ (known, ccl-vm#13)"
           (cd native/ccl && find . -name '*.da64fsl' | sort) > native.list
@@ -189,4 +194,18 @@ jobs:
           while read f; do cmp -s native/ccl/$f vm/ccl/$f || { echo "differs: $f"; ndiff=$((ndiff+1)); }; done < native.list
           echo "da64fsl files: $(wc -l < native.list), differing: $ndiff"
           [ $ndiff = 0 ] || echo "::warning::$ndiff of $(wc -l < native.list) da64fsl files differ (known, ccl-vm#13)"
+          exit $status
+      # The VM's output shouldn't depend on the lisp hosting it.
+      - name: Compare the VM's cross-compiles hosted in sbcl and in ccl
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          cmp -s vm/ccl/arm64-boot.image vm-ccl/ccl/arm64-boot.image && echo "boot images: ccl host byte-identical to sbcl host" \
+            || { echo "::error::the boot images cross-compiled in the VM hosted in ccl and in sbcl differ"; status=1; }
+          (cd vm-ccl/ccl && find . -name '*.da64fsl' | sort) > vm-ccl.list
+          diff vm.list vm-ccl.list > host-list.diff || { echo "::error::different sets of da64fsl files (sbcl vs ccl host)"; cat host-list.diff; status=1; }
+          ndiff=0
+          while read f; do cmp -s vm/ccl/$f vm-ccl/ccl/$f || { echo "differs: $f"; ndiff=$((ndiff+1)); }; done < vm.list
+          echo "da64fsl files: $(wc -l < vm.list), differing between the sbcl and ccl hosts: $ndiff"
+          [ $ndiff = 0 ] || { echo "::error::$ndiff da64fsl files differ between the VM hosted in sbcl and in ccl"; status=1; }
           exit $status
