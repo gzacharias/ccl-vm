@@ -26,13 +26,13 @@ tar -xzf ccl-bc.tar.gz        # makes ./ccl-bc/
 
 Then, in your Lisp:
 ```
-(load "~/quicklisp/setup.lisp")            ; or whatever you do to install quicklisp
-;; Tell ASDF about ccl-vm.  You can do so by putting a link to it in ~/common-lisp/
-;; or ~/quicklisp/local-projects/, or add it to the registry at runtime like this:
+(load "~/quicklisp/setup.lisp")         ; or whatever you do to install quicklisp
+;; Tell quicklisp about ccl-vm.  You can do so by putting a link to it in ~/common-lisp/
+;; or ~/quicklisp/local-projects/, or add it to the ASDF registry at runtime like this:
 (pushnew #P"/path/to/ccl-vm/" asdf:*central-registry* :test #'equal)
-(asdf:load-system "ccl-vm")                ; load ccl-vm.
-(ccl-vm:load-ccl #P"/path/to/ccl-bc/")     ; loads the bc bundle into the vm
-(ccl-vm:cloop)                             ; start the ccl listener in the vm
+(ql:quickload "ccl-vm")                 ; load ccl-vm.
+(ccl-vm:load-ccl #P"/path/to/ccl-bc/")  ; loads the bc bundle into the vm
+(ccl-vm:cloop)                          ; start the ccl listener in the vm
 ```
 
 You should get CCL's prompt:
