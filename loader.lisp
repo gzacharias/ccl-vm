@@ -13,12 +13,36 @@
 
 (defparameter *loading-ccl* nil)
 
+;;; signal native arithmetic errors as CCL errors
+(defun signal-ccl-arithmetic-error (condition)
+  (when (sym-fboundp (ccl 'error))
+    (let ((operation (arithmetic-error-operation condition))
+          (operands (arithmetic-error-operands condition)))
+      (ccl-funcall (ccl 'error)
+                   (typecase condition
+                     (division-by-zero (ccl 'division-by-zero))
+                     (floating-point-invalid-operation (ccl 'floating-point-invalid-operation))
+                     (floating-point-overflow (ccl 'floating-point-overflow))
+                     (floating-point-underflow (ccl 'floating-point-underflow))
+                     (floating-point-inexact (ccl 'floating-point-inexact))
+                     (t (ccl 'arithmetic-error)))
+                   (ccl :operation) (if (and (symbolp operation)
+                                             (eq (symbol-package operation) (find-package :common-lisp)))
+                                        (ccl operation)
+                                        nil)
+                   (ccl :operands) (ignore-errors (ccl operands))))))
+
+(defmacro with-ccl-arithmetic-errors (&body body)
+  `(handler-bind ((arithmetic-error #'signal-ccl-arithmetic-error))
+     ,@body))
+
 (defun cloop ()
   "Runs the CCL listener.  Returns the exit status when CCL exits (see CVM-EXIT)."
   (unless *ccl-toplevel-func*
     (error "CCL isn't loaded.  Call ~s first." '(load-ccl "bundle-dir")))
   (let ((*package* *native-package*)) ;; for debugging
     (with-ccl-compiling-setup ()
+     (with-ccl-arithmetic-errors
       (catch 'cvm-exit
         ;; What the kernel's toplevel_loop does: call the thread's toplevel function in a catch of
         ;; %TOPLEVEL-CATCH%, (TOPLEVEL) throws there, until the toplevel function is NIL.
@@ -26,7 +50,7 @@
               while fn
               do (restart-case (catch (sym-value (ccl '%toplevel-catch%))
                                  (ccl-funcall fn))
-                   (restart-cloop () :report (lambda (s) (format s "Restart CVM toplevel")))))))))
+                   (restart-cloop () :report (lambda (s) (format s "Restart CVM toplevel"))))))))))
 
 
 ;;; ~5 mins
