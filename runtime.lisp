@@ -1171,9 +1171,10 @@
                  (and (eql (length xv) (length yv)) (every #'eql xv yv)))))
             (t
              (let ((tag (fulltag x)))
-               (and (eq tag (Fulltag y))
+               (and (eq tag (fulltag y))
                     (cond ((eq tag fulltag-misc)
-                           (ccl-funcall (ccl 'hairy-equal) x y))
+                           (or (lap-eql x y) ;; handle numbers, which hairy-equal doesn't
+                               (ccl-funcall (ccl 'hairy-equal) x y)))
                           (t nil))))))))
 
 (deflapfunction %type-of (x)
