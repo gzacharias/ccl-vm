@@ -1,0 +1,32 @@
+# The quick check for a push (about 15-30 minutes): native builds, ccl-tests and bundles on the
+# two macs (native.yml), then the VM on sbcl on both macs: boot, checks, exit status, generation 1
+# (vm.yml, without the generation-2 fixed point).  The full suite is nightly.yml.
+# A push to the ci-quick branch tests gzacharias/ccl's ci branch.
+name: Quick check
+
+on:
+  workflow_dispatch:
+    inputs:
+      ccl_ref:
+        description: "gzacharias/ccl branch, tag or commit to build"
+        default: ci
+  push:
+    branches: [ci-quick]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    uses: ./.github/workflows/native.yml
+    with:
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+      platforms: '["intel", "arm64"]'
+
+  vm:
+    needs: native
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/vm.yml
+    with:
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+      hosts: '["sbcl"]'

@@ -1,0 +1,50 @@
+# After a release is published: on both macs and both host lisps, follow the README exactly as a
+# new user would, with the published bundle (releases/latest) and ccl-vm at the release's tag
+# (readme-check.sh), with an empty Quicklisp (no preloaded dependencies).  Catches a bundle that
+# doesn't match its ccl-vm, a README that's out of date, and setup the CI scripts paper over.
+# Can also be dispatched with a tag.
+name: Release check
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "ccl-vm release tag to check"
+        required: true
+  # A push to ci-release checks the latest release.
+  push:
+    branches: [ci-release]
+
+permissions:
+  contents: read
+
+jobs:
+  readme:
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [sbcl, ccl]
+        mac: [intel, arm64]
+    runs-on: ${{ fromJSON('{"intel":"macos-15-intel","arm64":"macos-latest"}')[matrix.mac] }}
+    timeout-minutes: 60
+    steps:
+      # Only for the scripts that install the host lisp; the README is followed with a fresh clone.
+      - uses: actions/checkout@v7
+        with:
+          path: ci-scripts
+      - name: Install ${{ matrix.host }} and Quicklisp
+        run: ci-scripts/.github/ci/install-hosts.sh --bare ${{ matrix.host }}
+      - name: Follow the README
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          [ -n "$TAG" ] || TAG=$(gh release view -R $GITHUB_REPOSITORY --json tagName --jq .tagName)
+          ci-scripts/.github/ci/readme-check.sh ${{ matrix.host }} $TAG
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: readme-log-${{ matrix.host }}-${{ matrix.mac }}
+          path: "*.log"

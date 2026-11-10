@@ -1,13 +1,16 @@
 #!/bin/bash
-# usage: install-hosts.sh HOST...   (HOST is sbcl or ccl)
+# usage: install-hosts.sh [--bare] HOST...   (HOST is sbcl or ccl)
 # Installs the host lisps that ccl-vm runs on, plus Quicklisp with ccl-vm's dependencies, and
 # unpacks the bc bundle (ccl-bc.tar.gz, downloaded by the workflow) into ./ccl-bc/.
+# --bare: only the lisps and an empty Quicklisp, as a new user has (no dependencies, no bundle).
 # For the ccl host, installs the released ccl 1.14 for this machine (Intel or Apple Silicon) in ./ccl-host/ and records its path in
 # CCL_HOST (for the later steps, via GITHUB_ENV).
 set -euo pipefail
 
 # The released ccl for this machine: Intel or Apple Silicon.
 . "$(dirname "$0")/platform.sh"
+bare=false
+[ "${1:-}" = --bare ] && { bare=true; shift; }
 CCL_HOST=$PWD/ccl-host/$CCL_KERNEL
 
 for host in "$@"; do
@@ -32,6 +35,7 @@ if [ ! -f ~/quicklisp/setup.lisp ]; then
     ccl)  "$CCL_HOST" -n -b -l quicklisp.lisp -e '(quicklisp-quickstart:install)' -e '(quit)' ;;
   esac
 fi
+$bare && exit 0
 # Download and compile ccl-vm's dependencies once per host.
 for host in "$@"; do
   case $host in
