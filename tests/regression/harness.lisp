@@ -4,7 +4,8 @@
 ;;;   REGRESSION FAIL NAME: got <value>, expected <value>
 ;;; An error in FORM is its value: (:error <condition type> <message>), so it fails the check
 ;;; without stopping the file.  run.sh appends a form printing REGRESSION DONE, so a file that
-;;; stops early (a reader error, an error outside a check) fails as well.
+;;; stops early (a reader error, an error outside a check) fails as well.  The last form prints
+;;; REGRESSION HARNESS READY; run.sh treats a log without it as a broken harness, not a failure.
 
 (defun report-regression-check (name form-thunk expected)
   (let ((actual (handler-case (funcall form-thunk)
@@ -16,3 +17,5 @@
 
 (defmacro regression-check (name form expected)
   `(report-regression-check ',name (lambda () ,form) ,expected))
+
+(format t "~&REGRESSION HARNESS READY~%")

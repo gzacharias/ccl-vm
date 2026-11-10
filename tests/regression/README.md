@@ -15,9 +15,15 @@ bc-compiler fixes that the VM depends on.
 
 HOST is a `.github/ci/vm` host (sbcl uses `$SBCL`, ccl uses `$CCL_HOST`).  With no TEST names it
 runs every test.  It prints one `ok`/`FAIL`/`skip` line per test, writes each test's output to
-`regression-LABEL/NAME.log` in the current directory (LABEL: `native` or `HOST-<bundle dir>`), and
-exits 1 when any test fails.  CI: native.yml runs it on the native build, vm.yml on the bundle and on
-generation 1 (when the workflow's `checks` input is true).
+`regression-LABEL/NAME.log` in the current directory (LABEL: `native` or `HOST-<bundle dir>`).
+
+Tests may fail: a failure is reported (a `FAIL` line, a `::warning::` annotation, a line in the
+GitHub step summary) but doesn't fail the CI step or the run.  `run.sh` exits 1 only when the
+harness itself breaks: an unknown TEST name, or a `.lisp` test whose log lacks the
+`REGRESSION HARNESS READY` line `harness.lisp` prints once loaded.
+
+CI: native.yml runs it on the native build, vm.yml on the bundle and on generation 1 (when the
+workflow's `checks` input is true).
 
 ## Adding a test
 
