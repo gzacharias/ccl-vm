@@ -1,5 +1,5 @@
-# The full suite: native builds on every platform (native.yml), then every VM host on both macs
-# with the generation-2 fixed point (vm.yml).  (cross.yml will be added here.)
+# The full suite: native builds on every platform (native.yml), then, in parallel, every VM host
+# on both macs with the generation-2 fixed point (vm.yml) and every cross-compile (cross.yml).
 # Dispatch by hand, or push to the ci-nightly branch (tests gzacharias/ccl's ci branch).
 name: Nightly
 
@@ -30,3 +30,10 @@ jobs:
     with:
       ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
       fixed_point: true
+
+  cross:
+    needs: native
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/cross.yml
+    with:
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}

@@ -1,0 +1,194 @@
+# Cross-compiles (hosts C x targets): every VM host ({sbcl, ccl} x {Intel, Apple Silicon mac})
+# cross-compiles a native ccl for each target (darwinx8664, darwinarm64) from the canonical bundle
+# (artifact ccl-bc, from native.yml in the same run); as the control, the other mac's native build
+# (artifact ccl-native-LABEL) cross-compiles it too.  Then on a machine of the target's kind,
+# each result boots in the stock 1.14 kernel, runs ccl-tests, and closes the loop: the booted
+# image rebuilds ccl and compiles the bc bundle, which must equal the canonical bundle.  Last,
+# each VM cross-compile is compared with the native control: a different set of fasls fails,
+# differing contents are warnings (known, ccl-vm#13).  Called by nightly.yml.
+# The steps' scripts are in .github/ci/.
+name: Cross-compiles
+
+on:
+  workflow_call:
+    inputs:
+      ccl_ref:
+        type: string
+        required: true
+      hosts:
+        description: "JSON list of cross-compiling hosts: native, and the VM's host lisps"
+        type: string
+        default: '["native", "sbcl", "ccl"]'
+      macs:
+        description: "JSON list of macs the cross-compiles run on (intel, arm64)"
+        type: string
+        default: '["intel", "arm64"]'
+      targets:
+        description: "JSON list of targets"
+        type: string
+        default: '["darwinx8664", "darwinarm64"]'
+
+permissions:
+  contents: read
+
+jobs:
+  xc:
+    strategy:
+      fail-fast: false
+      matrix:
+        host: ${{ fromJSON(inputs.hosts) }}
+        mac: ${{ fromJSON(inputs.macs) }}
+        target: ${{ fromJSON(inputs.targets) }}
+        # A native "cross-compile" for the machine's own platform is just a build.
+        exclude:
+          - { host: native, mac: intel, target: darwinx8664 }
+          - { host: native, mac: arm64, target: darwinarm64 }
+    # (runs-on can't see env.)
+    runs-on: ${{ fromJSON('{"intel":"macos-15-intel","arm64":"macos-latest"}')[matrix.mac] }}
+    timeout-minutes: 240
+    env:
+      CELL: ${{ matrix.host }}-${{ matrix.mac }}-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: ccl-vm
+      - name: Get the native build
+        if: ${{ matrix.host == 'native' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ccl-native-${{ matrix.mac }}
+      - name: Unpack the native build
+        if: ${{ matrix.host == 'native' }}
+        run: tar -xzf ccl-native.tar.gz
+      - name: Check out the sources to cross-compile
+        if: ${{ matrix.host != 'native' }}
+        uses: actions/checkout@v7
+        with:
+          repository: gzacharias/ccl
+          ref: ${{ inputs.ccl_ref }}
+          path: ccl
+          fetch-depth: 0               # full history and tags, so `git describe` works for the version string
+      - if: ${{ matrix.host != 'native' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ccl-bc
+      - name: Install ${{ matrix.host }} and Quicklisp
+        if: ${{ matrix.host != 'native' }}
+        run: ccl-vm/.github/ci/install-hosts.sh ${{ matrix.host }}
+      - name: Cross-compile ${{ matrix.target }} (${{ matrix.host }} on ${{ matrix.mac }})
+        run: ccl-vm/.github/ci/cross-compile.sh ${{ matrix.host }} ${{ matrix.target }} ccl
+      # Without the bundle and the other platform's fasls (a native tree's own).
+      - name: Pack the cross-compiled tree
+        run: |
+          other=$([ ${{ matrix.target }} = darwinarm64 ] && echo dx64fsl || echo da64fsl)
+          tar -czf xtree.tar.gz --exclude .git --exclude ccl-bc --exclude "*.$other" ccl
+      - uses: actions/upload-artifact@v7
+        with:
+          name: xtree-${{ env.CELL }}
+          path: xtree.tar.gz
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: xc-logs-${{ env.CELL }}
+          path: "*.log"
+
+  boot:
+    needs: xc
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        host: ${{ fromJSON(inputs.hosts) }}
+        mac: ${{ fromJSON(inputs.macs) }}
+        target: ${{ fromJSON(inputs.targets) }}
+        exclude:
+          - { host: native, mac: intel, target: darwinx8664 }
+          - { host: native, mac: arm64, target: darwinarm64 }
+    # On a machine of the target's kind.
+    runs-on: ${{ fromJSON('{"darwinx8664":"macos-15-intel","darwinarm64":"macos-latest"}')[matrix.target] }}
+    timeout-minutes: 180
+    env:
+      CELL: ${{ matrix.host }}-${{ matrix.mac }}-${{ matrix.target }}
+    steps:
+      - id: get
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: xtree-${{ env.CELL }}
+      - if: ${{ steps.get.outcome != 'success' }}
+        run: echo "::error::no cross-compiled tree for $CELL (its cross-compile failed)"; exit 1
+      - uses: actions/checkout@v7
+        with:
+          path: ccl-vm
+      - uses: actions/download-artifact@v8
+        with:
+          name: ccl-bc
+          path: canonical
+      - name: Boot in the stock 1.14 kernel and save a full image
+        id: boot
+        run: |
+          tar -xzf xtree.tar.gz
+          ccl-vm/.github/ci/boot-xc.sh ${{ matrix.target }} ccl
+      - name: Run ccl-tests on the cross-compiled image
+        id: ccl-tests
+        timeout-minutes: 60
+        run: |
+          . ccl-vm/.github/ci/platform.sh
+          ccl-vm/.github/ci/ccl-tests.sh ccl/$CCL_KERNEL
+      # Closing the loop: the cross-compiled ccl rebuilds itself and makes the canonical bundle.
+      - name: The cross-compiled image rebuilds ccl
+        id: rebuild
+        if: ${{ !cancelled() && steps.boot.outcome == 'success' }}
+        run: ccl-vm/.github/ci/native-rebuild.sh 2
+      - name: ... and compiles the bc bundle
+        id: bundle
+        if: ${{ !cancelled() && steps.rebuild.outcome == 'success' }}
+        run: ccl-vm/.github/ci/bc-compile.sh
+      - name: ... which must equal the canonical bundle
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
+        run: ccl-vm/.github/ci/compare-bundles.sh "canonical=canonical/ccl-bc.tar.gz" "$CELL=ccl-bc.tar.gz"
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: boot-logs-${{ env.CELL }}
+          path: |
+            *.log
+            ccl/boot.log
+
+  # Each VM cross-compile against the native control for its target.
+  compare:
+    needs: xc
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    env:
+      HOSTS: ${{ inputs.hosts }}
+      MACS: ${{ inputs.macs }}
+      TARGETS: ${{ inputs.targets }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: ccl-vm
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: xtree-*
+      - name: Compare the VM's cross-compiles with the native ones
+        run: |
+          status=0
+          for t in $(echo "$TARGETS" | tr -d '[]",'); do
+            # The native control runs on the other mac.
+            nmac=$([ $t = darwinarm64 ] && echo intel || echo arm64)
+            native=xtree-native-$nmac-$t
+            [ -f $native/xtree.tar.gz ] || { echo "::error::no native $t cross-compile to compare with"; status=1; continue; }
+            mkdir -p trees/$native && tar -xzf $native/xtree.tar.gz -C trees/$native
+            for h in $(echo "$HOSTS" | tr -d '[]",'); do
+              [ $h = native ] && continue
+              for m in $(echo "$MACS" | tr -d '[]",'); do
+                cell=xtree-$h-$m-$t
+                echo "== $h on $m, $t"
+                [ -f $cell/xtree.tar.gz ] || { echo "::error::no $cell"; status=1; continue; }
+                mkdir -p trees/$cell && tar -xzf $cell/xtree.tar.gz -C trees/$cell
+                ccl-vm/.github/ci/compare-xc.sh $t trees/$native/ccl trees/$cell/ccl || status=1
+              done
+            done
+          done
+          exit $status
