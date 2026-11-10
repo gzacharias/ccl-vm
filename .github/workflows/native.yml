@@ -1,0 +1,163 @@
+# Native platforms (matrix A): on Intel and Apple Silicon macs and x86-64 and arm64 Linux, builds
+# bc-compiler from the ccl 1.14 binaries (twice; the second rebuild must be warning-free), runs
+# ccl-tests on the native build and compiles the bc bundle.  The compare job then requires every
+# platform's bundle to be byte-identical, and uploads the Intel mac one as the canonical bundle
+# (artifact ccl-bc) for vm.yml and cross.yml.  Every cell runs to the end even if another fails.
+# If any build or ccl-tests fails, the control job builds upstream-base (the upstream ccl that
+# bc-compiler is merged with) the same way, to tell our problems from upstream's.  The platforms
+# input picks a subset of the labels (the quick check uses the two macs).  Artifacts: ccl-bc-LABEL, ccl-native-LABEL (the native build), logs-LABEL, ccl-bc.
+# The steps' scripts are in .github/ci/.
+name: Native builds
+
+on:
+  workflow_call:
+    inputs:
+      ccl_ref:
+        type: string
+        required: true
+      platforms:
+        description: "JSON list of platform labels to build on"
+        type: string
+        default: '["intel", "arm64", "linux-x86", "linux-arm64"]'
+  workflow_dispatch:
+    inputs:
+      ccl_ref:
+        description: "gzacharias/ccl branch, tag or commit to build"
+        default: ci
+      platforms:
+        description: "JSON list of platform labels to build on"
+        default: '["intel", "arm64", "linux-x86", "linux-arm64"]'
+  push:
+    branches: [ci-native]
+
+permissions:
+  contents: read
+
+env:
+  CCL_REF: ${{ inputs.ccl_ref || 'ci' }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        label: ${{ fromJSON(inputs.platforms || '["intel", "arm64", "linux-x86", "linux-arm64"]') }}
+    # The GitHub runner for each platform label (runs-on can't see env).
+    runs-on: ${{ fromJSON('{"intel":"macos-15-intel","arm64":"macos-latest","linux-x86":"ubuntu-latest","linux-arm64":"ubuntu-24.04-arm"}')[matrix.label] }}
+    timeout-minutes: 150
+    steps:
+      - name: Check out bc-compiler
+        uses: actions/checkout@v7
+        with:
+          repository: gzacharias/ccl
+          ref: ${{ env.CCL_REF }}
+          path: ccl
+          fetch-depth: 0               # full history and tags, so `git describe` works for the version string
+      - name: Check out ccl-vm
+        uses: actions/checkout@v7
+        with:
+          path: ccl-vm
+      - name: Install 1.14 bootstrapping binaries
+        run: ccl-vm/.github/ci/install-bootstrap.sh
+      - name: First rebuild (stock 1.14 kernel)
+        id: build1
+        run: ccl-vm/.github/ci/native-rebuild.sh 1
+      - name: Boot the new boot image in the kernel debugger
+        if: ${{ failure() && steps.build1.outcome == 'failure' }}
+        timeout-minutes: 5
+        run: ccl-vm/.github/ci/boot-debug.sh
+      - name: Second rebuild (must be warning-free)
+        run: ccl-vm/.github/ci/native-rebuild.sh 2 --fail-on-warnings
+      - name: Compile the bc bundle
+        id: bundle
+        run: ccl-vm/.github/ci/bc-compile.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ccl-bc-${{ matrix.label }}
+          path: ccl-bc.tar.gz
+      # After the bundle, so a ccl-tests failure doesn't keep the bundle from being compared.
+      - name: Run ccl-tests on the native build
+        timeout-minutes: 60
+        run: ccl-vm/.github/ci/ccl-tests.sh ccl/$CCL_KERNEL
+      - name: Save the native build
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
+        run: tar -czf ccl-native.tar.gz --exclude .git --exclude ccl-bc ccl
+      - if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ccl-native-${{ matrix.label }}
+          path: ccl-native.tar.gz
+      - name: Keep the logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: logs-${{ matrix.label }}
+          path: "*.log"
+
+  # The bundle is text and mustn't depend on the machine that compiled it.
+  compare:
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: ccl-vm
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ccl-bc-*
+      - name: Every bundle must equal the Intel mac one
+        env:
+          PLATFORMS: ${{ inputs.platforms || '["intel", "arm64", "linux-x86", "linux-arm64"]' }}
+        run: |
+          others=()
+          for label in $(echo "$PLATFORMS" | tr -d '[]",'); do
+            [ $label = intel ] || others+=("$label=ccl-bc-$label/ccl-bc.tar.gz")
+          done
+          ccl-vm/.github/ci/compare-bundles.sh "intel=ccl-bc-intel/ccl-bc.tar.gz" "${others[@]}"
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle-diff
+          path: bundle-diff.txt
+      - name: The canonical bundle
+        if: ${{ !cancelled() && hashFiles('ccl-bc-intel/ccl-bc.tar.gz') != '' }}
+        run: mv ccl-bc-intel/ccl-bc.tar.gz .
+      - if: ${{ !cancelled() && hashFiles('ccl-bc.tar.gz') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ccl-bc
+          path: ccl-bc.tar.gz
+
+  # Only when something failed: does upstream-base (no bc compiler, so no bundle) fail the same way?
+  upstream-control:
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'failure' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        label: ${{ fromJSON(inputs.platforms || '["intel", "arm64", "linux-x86", "linux-arm64"]') }}
+    # The GitHub runner for each platform label (runs-on can't see env).
+    runs-on: ${{ fromJSON('{"intel":"macos-15-intel","arm64":"macos-latest","linux-x86":"ubuntu-latest","linux-arm64":"ubuntu-24.04-arm"}')[matrix.label] }}
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: gzacharias/ccl
+          ref: upstream-base
+          path: ccl
+          fetch-depth: 0
+      - uses: actions/checkout@v7
+        with:
+          path: ccl-vm
+      - run: ccl-vm/.github/ci/install-bootstrap.sh
+      - run: ccl-vm/.github/ci/native-rebuild.sh 1
+      - run: ccl-vm/.github/ci/native-rebuild.sh 2
+      - name: Run ccl-tests on the upstream-base build
+        timeout-minutes: 60
+        run: ccl-vm/.github/ci/ccl-tests.sh ccl/$CCL_KERNEL
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: logs-upstream-${{ matrix.label }}
+          path: "*.log"
