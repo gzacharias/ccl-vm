@@ -102,60 +102,19 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           pattern: ccl-bc-*
+      - uses: actions/checkout@v7
+        with:
+          path: ccl-vm
       - name: Every bundle must equal the Intel mac one
         run: |
-          mkdir intel
-          tar -xzf ccl-bc-intel/ccl-bc.tar.gz -C intel
-          echo "bc files: intel $(find intel -name '*.bc' | wc -l)"
+          ci=ccl-vm/.github/ci
           status=0
-          : > bundle-diff.txt
-          for label in arm64 linux-x86 linux-arm64; do
-            if [ ! -f ccl-bc-$label/ccl-bc.tar.gz ]; then
-              echo "::error::no $label bundle (its probe didn't get that far)"; status=1; continue
-            fi
-            mkdir $label
-            tar -xzf ccl-bc-$label/ccl-bc.tar.gz -C $label
-            if diff -r intel $label > diff-$label.txt; then
-              echo "$label: byte-identical to the Intel bundle ($(find $label -name '*.bc' | wc -l) files)"
-            else
-              echo "::error::the $label bundle differs from the Intel one ($(grep -c '^diff\|^Only in' diff-$label.txt) files)"
-              { echo "=== $label"; cat diff-$label.txt; } >> bundle-diff.txt
-              status=1
-            fi
-          done
-          # The bundle CCL rebuilds inside the VM shouldn't depend on the machine the VM runs on either.
-          if [ -f vm-bundle-intel/vm-bundle.tar.gz ] && [ -f vm-bundle-arm64/vm-bundle.tar.gz ]; then
-            mkdir vm-intel vm-arm64
-            tar -xzf vm-bundle-intel/vm-bundle.tar.gz -C vm-intel
-            tar -xzf vm-bundle-arm64/vm-bundle.tar.gz -C vm-arm64
-            if diff -r vm-intel vm-arm64 > diff-vm.txt; then
-              echo "VM-rebuilt bundles: Apple Silicon byte-identical to Intel ($(find vm-arm64 -name '*.bc' | wc -l) files)"
-            else
-              echo "::error::the bundle rebuilt in the VM on Apple Silicon differs from the Intel one ($(grep -c '^diff\|^Only in' diff-vm.txt) files)"
-              { echo "=== VM-rebuilt, arm64 vs intel"; cat diff-vm.txt; } >> bundle-diff.txt
-              status=1
-            fi
-          else
-            echo "::error::missing a VM-rebuilt bundle (intel: $([ -f vm-bundle-intel/vm-bundle.tar.gz ] && echo yes || echo no), arm64: $([ -f vm-bundle-arm64/vm-bundle.tar.gz ] && echo yes || echo no))"
-            status=1
-          fi
-          # Same for the bundle rebuilt in the VM hosted in ccl on Apple Silicon.
-          if [ -f vm-bundle-intel/vm-bundle.tar.gz ] && [ -f vm-bundle-ccl-arm64/vm-bundle-ccl.tar.gz ]; then
-            mkdir -p vm-intel vm-ccl-arm64
-            [ -d vm-intel/vm-rebuild ] || tar -xzf vm-bundle-intel/vm-bundle.tar.gz -C vm-intel
-            tar -xzf vm-bundle-ccl-arm64/vm-bundle-ccl.tar.gz -C vm-ccl-arm64
-            if diff -r vm-intel/vm-rebuild vm-ccl-arm64/vm-rebuild-ccl > diff-vm-ccl.txt; then
-              echo "VM-rebuilt bundles: ccl host on Apple Silicon byte-identical to Intel ($(find vm-ccl-arm64 -name '*.bc' | wc -l) files)"
-            else
-              echo "::error::the bundle rebuilt in the VM hosted in ccl on Apple Silicon differs from the Intel one ($(grep -c '^diff\|^Only in' diff-vm-ccl.txt) files)"
-              { echo "=== VM-rebuilt, ccl host on arm64 vs intel"; cat diff-vm-ccl.txt; } >> bundle-diff.txt
-              status=1
-            fi
-          else
-            echo "::error::missing a VM-rebuilt bundle (intel: $([ -f vm-bundle-intel/vm-bundle.tar.gz ] && echo yes || echo no), ccl host on arm64: $([ -f vm-bundle-ccl-arm64/vm-bundle-ccl.tar.gz ] && echo yes || echo no))"
-            status=1
-          fi
-          head -200 bundle-diff.txt
+          $ci/compare-bundles.sh "Intel mac=ccl-bc-intel/ccl-bc.tar.gz" \
+            arm64=ccl-bc-arm64/ccl-bc.tar.gz linux-x86=ccl-bc-linux-x86/ccl-bc.tar.gz linux-arm64=ccl-bc-linux-arm64/ccl-bc.tar.gz || status=1
+          # The bundle CCL rebuilds inside the VM shouldn't depend on the machine or host lisp the VM runs on either.
+          $ci/compare-bundles.sh "VM-rebuilt on Intel (sbcl)=vm-bundle-intel/vm-bundle.tar.gz" \
+            "VM-rebuilt on Apple Silicon (sbcl)=vm-bundle-arm64/vm-bundle.tar.gz" \
+            "VM-rebuilt on Apple Silicon (ccl)=vm-bundle-ccl-arm64/vm-bundle-ccl.tar.gz" || status=1
           exit $status
       - if: ${{ failure() }}
         uses: actions/upload-artifact@v7

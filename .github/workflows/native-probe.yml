@@ -8,7 +8,7 @@
 # Uploads ccl-bc-<label> (the bundle), vm-bundle-<label> (the bundle rebuilt in the VM, macOS only;
 # vm-bundle-ccl-<label> with the ccl host, Apple Silicon only)
 # and logs-<label>; the job summary lists every step's
-# outcome.
+# outcome.  The steps' scripts are in .github/ci/.
 name: Native build probe
 
 on:
@@ -44,116 +44,45 @@ jobs:
           path: ccl
           fetch-depth: 0               # full history and tags, so `git describe` works for the version string
 
+      # The scripts come from this repository.
+      - name: Check out ccl-vm
+        uses: actions/checkout@v7
+        with:
+          path: ccl-vm
+
       - name: Install 1.14 bootstrapping binaries
-        run: |
-          case $(uname -s)-$(uname -m) in
-            Darwin-arm64)  kernel=darm64cl; tarball=darwinarm64.tar.gz ;;
-            Darwin-x86_64) kernel=dx86cl64; tarball=darwinx86.tar.gz ;;
-            Linux-aarch64) kernel=arm64cl;  tarball=linuxarm64.tar.gz ;;
-            Linux-x86_64)  kernel=lx86cl64; tarball=linuxx86.tar.gz ;;
-            *)      echo "::error::unknown platform $(uname -s)-$(uname -m)"; exit 1 ;;
-          esac
-          echo "KERNEL=$kernel" >> "$GITHUB_ENV"
-          curl -sSfL -O https://github.com/Clozure/ccl/releases/download/v1.14/$tarball
-          tar -xzf $tarball -C ccl
-          {
-            if [ "$(uname -s)" = Darwin ]; then
-              sw_vers; uname -m; sysctl -n hw.ncpu machdep.cpu.brand_string
-              clang --version | head -1
-            else
-              grep PRETTY_NAME /etc/os-release; uname -m; nproc
-              gcc --version | head -1; m4 --version | head -1
-            fi
-            make --version | head -1
-            git -C ccl log -1 --format='ccl %h %s'
-            ccl/$kernel -n -b -e '(progn (format t "~&~a~%" (lisp-implementation-version)) (quit))'
-          } 2>&1 | tee system.log
+        run: ccl-vm/.github/ci/install-bootstrap.sh
 
       - name: First rebuild (stock 1.14 kernel)
         id: build1
         continue-on-error: ${{ !inputs.strict }}
-        working-directory: ccl
-        run: |
-          ./$KERNEL -n -b > ../build1.log 2>&1 <<'EOF' || true
-          (let ((*warn-if-redefine-kernel* nil)) (load "ccl:lib;compile-ccl.lisp"))
-          (progn
-            (rebuild-ccl :clean t)
-            (format t "~&BUILD1-DONE~%"))
-          (quit)
-          EOF
-          cat ../build1.log
-          # Whole-line match: a backtrace can quote the form's source.
-          grep -qx BUILD1-DONE ../build1.log
+        run: ccl-vm/.github/ci/native-rebuild.sh 1
 
-      # If the new boot image doesn't boot, rebuild-ccl only reports that it failed (it runs it in
-      # batch mode).  Boot it again outside batch mode, so a crash lands in the kernel debugger,
-      # which reads these commands from stdin: describe the exception, registers, lisp registers,
-      # backtrace, kill.
       - name: Boot the new boot image in the kernel debugger
         id: boot-debug
         if: ${{ !cancelled() && steps.build1.outcome == 'failure' }}
         continue-on-error: true
         timeout-minutes: 5
-        working-directory: ccl
-        run: |
-          image=$(ls *-boot*.image | head -1)
-          [ -n "$image" ] || { echo "::error::no boot image"; exit 1; }
-          echo "boot image: $image"
-          status=0
-          printf 'D\nR\nL\nB\nK\n' | ./$KERNEL --image-name "$image" --no-init > ../boot-debug.log 2>&1 || status=$?
-          cat ../boot-debug.log
-          echo "exit status $status"
+        run: ccl-vm/.github/ci/boot-debug.sh
 
+      # Warnings don't stop the probe from going on to make the bundle, unless strict.
       - name: Second rebuild (should be warning-free)
         id: build2
         if: ${{ !cancelled() && steps.build1.outcome == 'success' }}
         continue-on-error: ${{ !inputs.strict }}
-        working-directory: ccl
-        run: |
-          ./$KERNEL -n -b > ../build2.log 2>&1 <<'EOF' || true
-          (progn
-            (rebuild-ccl :clean t)
-            (format t "~&BUILD2-DONE~%"))
-          (quit)
-          EOF
-          cat ../build2.log
-          grep -qx BUILD2-DONE ../build2.log
-          # Warnings don't stop the probe from going on to make the bundle.
-          if grep -q ';Compiler warnings' ../build2.log; then
-            echo "::warning::second rebuild has warnings"
-            ${{ inputs.strict }} && exit 1
-          fi
-          true
+        run: ccl-vm/.github/ci/native-rebuild.sh 2 ${{ inputs.strict && '--fail-on-warnings' || '' }}
 
       - name: Compile the bc bundle
         id: bundle
         if: ${{ !cancelled() && steps.build2.outcome == 'success' }}
         continue-on-error: ${{ !inputs.strict }}
-        working-directory: ccl
-        run: |
-          ./$KERNEL -n -b > ../bc.log 2>&1 <<'EOF' || true
-          (load "ccl:tools;xdarwincvm.lisp")
-          (progn
-            (ccl:bc-compile-ccl :force t :output "ccl:ccl-bc;")
-            (format t "~&BC-DONE~%"))
-          (quit)
-          EOF
-          cat ../bc.log
-          grep -qx BC-DONE ../bc.log
-          echo "bc files: $(find ccl-bc -name '*.bc' | wc -l)"
-          tar -czf ../ccl-bc.tar.gz ccl-bc
+        run: ccl-vm/.github/ci/bc-compile.sh
 
       - if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: ccl-bc-${{ inputs.label }}
           path: ccl-bc.tar.gz
-
-      - name: Check out ccl-vm
-        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && runner.os == 'macOS' }}
-        uses: actions/checkout@v7
-        with:
-          path: ccl-vm
 
       # On Apple Silicon, ccl is a VM host too (on Intel, vm-test.yml covers the ccl host).
       - name: Install sbcl (and on Apple Silicon ccl) and Quicklisp
@@ -187,12 +116,7 @@ jobs:
         # control run (ccl-tests can be ahead of the ccl being built).
         continue-on-error: true
         timeout-minutes: 60
-        working-directory: ccl-tests
-        run: |
-          status=0
-          make CCL=../ccl/$KERNEL > ../ccl-tests.log 2>&1 || status=$?
-          tail -60 ../ccl-tests.log
-          exit $status
+        run: ccl-vm/.github/ci/ccl-tests.sh ccl/$CCL_KERNEL
 
       - name: rebuild-ccl inside the VM (sbcl host)
         id: vm-rebuild

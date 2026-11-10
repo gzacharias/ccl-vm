@@ -48,15 +48,20 @@ jobs:
       - name: Unpack the native build
         run: tar -xzf ccl-native.tar.gz
 
-      - name: Check out ccl-tests
+      - name: Check out ccl-vm
         uses: actions/checkout@v7
         with:
-          repository: Clozure/ccl-tests
-          path: ccl-tests
+          path: ccl-vm
 
       - name: Run ccl-tests on the native build
-        working-directory: ccl-tests
-        run: make CCL=../ccl/dx86cl64
+        run: ccl-vm/.github/ci/ccl-tests.sh ccl/dx86cl64
+
+      - name: Keep the log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ccl-tests-log
+          path: ccl-tests.log
 
   vm:
     needs: bundle

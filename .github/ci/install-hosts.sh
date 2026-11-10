@@ -7,11 +7,8 @@
 set -euo pipefail
 
 # The released ccl for this machine: Intel or Apple Silicon.
-case $(uname -m) in
-  arm64) ccl_platform=darwinarm64 ccl_kernel=darm64cl ;;
-  *)     ccl_platform=darwinx86   ccl_kernel=dx86cl64 ;;
-esac
-CCL_HOST=$PWD/ccl-host/$ccl_kernel
+. "$(dirname "$0")/platform.sh"
+CCL_HOST=$PWD/ccl-host/$CCL_KERNEL
 
 for host in "$@"; do
   case $host in
@@ -19,10 +16,9 @@ for host in "$@"; do
       brew install sbcl
       sbcl --version ;;
     ccl)
-      curl -sSfL -O https://github.com/Clozure/ccl/releases/download/v1.14/ccl-1.14-$ccl_platform.tar.gz
       mkdir -p ccl-host
-      tar -xzf ccl-1.14-$ccl_platform.tar.gz -C ccl-host --strip-components 1
-      echo "CCL_HOST=$CCL_HOST" >> "$GITHUB_ENV"
+      tar -xzf "$(fetch_release ccl-1.14-$CCL_PLATFORM.tar.gz)" -C ccl-host --strip-components 1
+      github_env "CCL_HOST=$CCL_HOST"
       "$CCL_HOST" -n -b -e '(progn (format t "~&~a~%" (lisp-implementation-version)) (quit))' ;;
     *)
       echo "unknown host $host" >&2; exit 1 ;;

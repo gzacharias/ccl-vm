@@ -1,6 +1,7 @@
 # Reusable workflow, called by vm-test.yml and vm-extended.yml: builds bc-compiler natively,
-# starting from the ccl 1.14 binaries, and compiles the bc bundle.  Uploads two artifacts:
-# ccl-bc (the bundle) and ccl-native (the native build, for running ccl-tests).
+# starting from the ccl 1.14 binaries, and compiles the bc bundle.  Uploads the artifacts
+# ccl-bc (the bundle), ccl-native (the native build, for running ccl-tests) and bundle-logs.
+# The steps' scripts are in .github/ci/.
 name: Build bundle
 
 on:
@@ -10,9 +11,6 @@ on:
         description: "gzacharias/ccl branch, tag or commit to build"
         type: string
         required: true
-
-env:
-  RELEASE_URL: https://github.com/Clozure/ccl/releases/download/v1.14/darwinx86.tar.gz
 
 jobs:
   bundle:
@@ -25,44 +23,23 @@ jobs:
           ref: ${{ inputs.ccl_ref }}
           path: ccl
 
+      # The scripts come from this repository.
+      - name: Check out ccl-vm
+        uses: actions/checkout@v7
+        with:
+          path: ccl-vm
+
       - name: Install 1.14 bootstrapping binaries
-        run: |
-          curl -sSfL -O $RELEASE_URL
-          tar -xzf darwinx86.tar.gz -C ccl
+        run: ccl-vm/.github/ci/install-bootstrap.sh
 
       - name: First rebuild (stock 1.14 kernel)
-        working-directory: ccl
-        run: |
-          ./dx86cl64 -n -b <<'EOF'
-          (let ((*warn-if-redefine-kernel* nil)) (load "ccl:lib;compile-ccl.lisp"))
-          (rebuild-ccl :clean t)
-          (format t "~&BUILD1-DONE~%")
-          (quit)
-          EOF
+        run: ccl-vm/.github/ci/native-rebuild.sh 1
 
       - name: Second rebuild (should be warning-free)
-        working-directory: ccl
-        run: |
-          ./dx86cl64 -n -b > ../build2.log 2>&1 <<'EOF'
-          (rebuild-ccl :clean t)
-          (format t "~&BUILD2-DONE~%")
-          (quit)
-          EOF
-          cat ../build2.log
-          grep -q BUILD2-DONE ../build2.log
-          if grep -q ';Compiler warnings' ../build2.log; then echo "::error::second rebuild has warnings"; exit 1; fi
+        run: ccl-vm/.github/ci/native-rebuild.sh 2 --fail-on-warnings
 
       - name: Compile the bc bundle
-        working-directory: ccl
-        run: |
-          ./dx86cl64 -n -b <<'EOF'
-          (load "ccl:tools;xdarwincvm.lisp")
-          (ccl:bc-compile-ccl :force t :output "ccl:ccl-bc;")
-          (format t "~&BC-DONE~%")
-          (quit)
-          EOF
-          echo "bc files: $(find ccl-bc -name '*.bc' | wc -l)"
-          tar -czf ../ccl-bc.tar.gz ccl-bc
+        run: ccl-vm/.github/ci/bc-compile.sh
 
       - uses: actions/upload-artifact@v7
         with:
@@ -76,3 +53,10 @@ jobs:
         with:
           name: ccl-native
           path: ccl-native.tar.gz
+
+      - name: Keep the logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle-logs
+          path: "*.log"

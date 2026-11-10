@@ -57,9 +57,7 @@ jobs:
         run: ccl-vm/.github/ci/vm-rebuild.sh sbcl gen1 gen2
 
       - name: Generation 2 must equal generation 1
-        run: |
-          diff -rq gen1 gen2
-          echo "steady state: generation 2 is byte-identical to generation 1"
+        run: ccl-vm/.github/ci/compare-bundles.sh "generation 1=gen1" "generation 2=gen2"
 
       - name: Save generation 1, for the cross-host comparison
         if: ${{ !cancelled() }}
@@ -117,15 +115,15 @@ jobs:
     needs: [steady-state, ccl-host-rebuild]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+        with:
+          path: ccl-vm
       - uses: actions/download-artifact@v8
         with:
           pattern: vm-bundle-*
           merge-multiple: true
       - name: The ccl host's bundle must equal the sbcl host's
-        run: |
-          tar -xzf vm-bundle-sbcl.tar.gz
-          tar -xzf vm-bundle-ccl.tar.gz
-          diff -rq gen1 vm-bundle-ccl && echo "the bundles built in the VM on sbcl and on ccl are byte-identical"
+        run: ccl-vm/.github/ci/compare-bundles.sh "sbcl host=vm-bundle-sbcl.tar.gz" "ccl host=vm-bundle-ccl.tar.gz"
 
   ccl-host-cross-compile:
     needs: bundle
