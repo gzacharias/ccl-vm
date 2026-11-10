@@ -1,7 +1,7 @@
 # On a push to master: does this ccl-vm still work with the released setup?  Takes the latest
 # release's bundle (ccl-bc.tar.gz) and, on both macs, boots it in the VM on sbcl and ccl, and on
 # sbcl rebuilds ccl in the VM from the ccl sources at bc-<release tag> (vm.yml, without the
-# regression checks).  A change to the bundle format must fail here until the next release.
+# regression tests).  A change to the bundle format must fail here until the next release.
 name: Released bundle
 
 on:

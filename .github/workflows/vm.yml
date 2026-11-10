@@ -1,11 +1,11 @@
 # VM hosts (matrix C): {sbcl, ccl 1.14} x {Intel, Apple Silicon mac}, all on the canonical bundle
-# (artifact ccl-bc, from native.yml in the same run; its checks-intel artifact is the reference for
-# the float checks).  Each cell boots the bundle (smoke), runs the nan/float checks and the exit
-# status checks, rebuilds ccl in the VM (generation 1) and runs the checks on generation 1;
+# (artifact ccl-bc, from native.yml in the same run).  Each cell boots the bundle (smoke), runs the
+# regression tests (tests/regression), rebuilds ccl in the VM (generation 1) and runs the
+# regression tests on generation 1;
 # with fixed_point, also rebuilds from generation 1 (generation 2), which must equal it.  The
 # compare job then requires every cell's generation 1 to be byte-identical.  (Generation 1 is
 # not the native bundle: they differ in every file, ccl-vm#13.)  Only the rebuild_hosts cells
-# rebuild; without checks, the nan/float and exit status checks are skipped.  With release_tag,
+# rebuild; without checks, the regression tests are skipped.  With release_tag,
 # the bundle is that release's ccl-bc.tar.gz instead of the artifact.  Called by nightly.yml,
 # quick.yml and released.yml.  The steps' scripts are in .github/ci/.
 name: VM tests
@@ -29,7 +29,7 @@ on:
         type: string
         default: '["sbcl", "ccl"]'
       checks:
-        description: "Run the nan/float and exit status checks"
+        description: "Run the regression tests (tests/regression)"
         type: boolean
         default: true
       release_tag:
@@ -78,31 +78,23 @@ jobs:
         run: |
           gh release download "${{ inputs.release_tag }}" -R "$GITHUB_REPOSITORY" -p ccl-bc.tar.gz
           tar -xzf ccl-bc.tar.gz
-      - if: ${{ inputs.checks }}
-        uses: actions/download-artifact@v8
-        with:
-          name: checks-intel
-          path: native-checks
       - name: Install ${{ matrix.host }} and Quicklisp
         run: ccl-vm/.github/ci/install-hosts.sh ${{ matrix.host }}
 
       - name: Boot the bundle in the VM
         run: ccl-vm/.github/ci/vm-smoke.sh ${{ matrix.host }}
-      - name: Checks (nan, float)
+      - name: Regression tests
         if: ${{ !cancelled() && inputs.checks }}
-        run: ccl-vm/.github/ci/run-checks.sh ${{ matrix.host }} ccl-bc native-checks/float-checks-native.txt
-      - name: Exit status
-        if: ${{ !cancelled() && inputs.checks }}
-        run: ccl-vm/.github/ci/vm-exit-status.sh ${{ matrix.host }} ccl-bc
+        run: ccl-vm/tests/regression/run.sh ${{ matrix.host }} ccl-bc
 
       - name: Generation 1 (rebuild ccl in the VM from the bundle)
         id: gen1
         if: ${{ !cancelled() && contains(fromJSON(inputs.rebuild_hosts), matrix.host) }}
         timeout-minutes: 150
         run: ccl-vm/.github/ci/vm-rebuild.sh ${{ matrix.host }} ccl-bc gen1
-      - name: Checks on generation 1
+      - name: Regression tests on generation 1
         if: ${{ !cancelled() && inputs.checks && steps.gen1.outcome == 'success' }}
-        run: ccl-vm/.github/ci/run-checks.sh ${{ matrix.host }} gen1 native-checks/float-checks-native.txt
+        run: ccl-vm/tests/regression/run.sh ${{ matrix.host }} gen1
       - name: Save generation 1
         if: ${{ !cancelled() && steps.gen1.outcome == 'success' }}
         run: tar -czf gen1.tar.gz gen1
@@ -128,7 +120,7 @@ jobs:
           name: vm-logs-${{ env.CELL }}
           path: |
             *.log
-            *-checks-*.txt
+            regression-*/
 
   # The bundle CCL rebuilds inside the VM mustn't depend on the host lisp or the machine.
   compare:

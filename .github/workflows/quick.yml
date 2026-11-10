@@ -1,5 +1,5 @@
 # The quick check for a push (about 15-30 minutes): native builds, ccl-tests and bundles on the
-# two macs (native.yml), then the VM on sbcl and ccl on both macs: boot, checks, exit status, and
+# two macs (native.yml), then the VM on sbcl and ccl on both macs: boot, regression tests, and
 # on sbcl generation 1 (vm.yml, without the generation-2 fixed point).  The full suite is
 # nightly.yml.
 # A push to the ci-quick branch tests gzacharias/ccl's ci branch.

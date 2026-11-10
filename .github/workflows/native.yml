@@ -76,13 +76,9 @@ jobs:
         with:
           name: ccl-bc-${{ matrix.label }}
           path: ccl-bc.tar.gz
-      # The native output is what vm.yml's float checks must match.
-      - name: Native checks (nan, float)
-        run: ccl-vm/.github/ci/run-checks.sh native
-      - uses: actions/upload-artifact@v7
-        with:
-          name: checks-${{ matrix.label }}
-          path: "*-checks-native.txt"
+      - name: Regression tests on the native build
+        if: ${{ !cancelled() && steps.build2.outcome == 'success' }}
+        run: ccl-vm/tests/regression/run.sh native ccl
       # After the bundle, so a ccl-tests failure doesn't keep the bundle from being compared.
       - name: Run ccl-tests on the native build
         if: ${{ !cancelled() && steps.build2.outcome == 'success' }}
@@ -101,7 +97,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: logs-${{ matrix.label }}
-          path: "*.log"
+          path: |
+            *.log
+            regression-*/
 
   # The bundle is text and mustn't depend on the machine that compiled it.
   compare:
