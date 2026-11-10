@@ -1,0 +1,18 @@
+;;; Prints FCHECK lines about float negation, signed zeros and NaNs; run-checks.sh requires the
+;;; VM output to equal the native one.  Ends with FCHECK DONE.
+(defun fbits (x) (multiple-value-list (ccl::double-float-bits x)))
+(format t "~&FCHECK NEG0 ~x~%" (fbits (- (identity 0d0))))
+(format t "~&FCHECK NEGM0 ~x~%" (fbits (- (identity -0d0))))
+(format t "~&FCHECK NEGNAN ~x~%" (fbits (- (identity ccl::double-float-nan))))
+(format t "~&FCHECK MULNEGNAN ~x~%" (fbits (* 2d0 (- (identity ccl::double-float-nan)))))
+(format t "~&FCHECK ADDNAN ~x~%" (fbits (+ (identity ccl::double-float-nan) 0d0)))
+(format t "~&FCHECK FUNCALL-NEGATE ~x~%" (fbits (funcall 'ccl::%negate (identity ccl::double-float-nan))))
+(format t "~&FCHECK DECL-NEG ~x~%" (fbits (funcall (compile nil '(lambda (x) (declare (double-float x)) (- x))) 0d0)))
+(format t "~&FCHECK SDECL-NEG ~s~%" (funcall (compile nil '(lambda (x) (declare (single-float x)) (- x))) 0.0))
+(format t "~&FCHECK SINGLE ~s ~s ~s ~s~%" -0.0 (- (identity 0.0)) (- (identity 1.5)) (list (float-sign -0.0) (abs -0.0) (minusp -0.0)))
+(format t "~&FCHECK DOUBLE-PRINT ~s ~s~%" -0d0 (- (identity 0d0)))
+(format t "~&FCHECK INF ~x~%" (fbits (+ (identity ccl::double-float-positive-infinity) 1d0)))
+(format t "~&FCHECK SUB0 ~x~%" (fbits (- 0 (identity 0d0))))
+(format t "~&FCHECK FIX ~s ~s~%" (- (identity 5)) (- (identity most-negative-fixnum)))
+(format t "~&FCHECK RATBIG ~s ~s~%" (- (identity 1/3)) (- (identity (expt 2 70))))
+(format t "~&FCHECK DONE~%")

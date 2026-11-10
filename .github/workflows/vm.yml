@@ -1,0 +1,138 @@
+# VM hosts (matrix C): {sbcl, ccl 1.14} x {Intel, Apple Silicon mac}, all on the canonical bundle
+# (artifact ccl-bc, from native.yml in the same run; its checks-intel artifact is the reference for
+# the float checks).  Each cell boots the bundle (smoke), runs the nan/float checks and the exit
+# status checks, rebuilds ccl in the VM (generation 1) and runs the checks on generation 1;
+# with fixed_point, also rebuilds from generation 1 (generation 2), which must equal it.  The
+# compare job then requires every cell's generation 1 to be byte-identical.  (Generation 1 is
+# not the native bundle: they differ in every file, ccl-vm#13.)  Called by nightly.yml and
+# quick.yml.  The steps' scripts are in .github/ci/.
+name: VM tests
+
+on:
+  workflow_call:
+    inputs:
+      ccl_ref:
+        type: string
+        required: true
+      hosts:
+        description: "JSON list of host lisps"
+        type: string
+        default: '["sbcl", "ccl"]'
+      macs:
+        description: "JSON list of macs (intel, arm64)"
+        type: string
+        default: '["intel", "arm64"]'
+      fixed_point:
+        description: "Also build generation 2 and require it to equal generation 1"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  vm:
+    strategy:
+      fail-fast: false
+      matrix:
+        host: ${{ fromJSON(inputs.hosts) }}
+        mac: ${{ fromJSON(inputs.macs) }}
+    # (runs-on can't see env.)
+    runs-on: ${{ fromJSON('{"intel":"macos-15-intel","arm64":"macos-latest"}')[matrix.mac] }}
+    timeout-minutes: 330
+    env:
+      CELL: ${{ matrix.host }}-${{ matrix.mac }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: ccl-vm
+      - name: Check out the ccl sources (for rebuild-ccl)
+        uses: actions/checkout@v7
+        with:
+          repository: gzacharias/ccl
+          ref: ${{ inputs.ccl_ref }}
+          path: ccl
+          fetch-depth: 0               # full history and tags, so `git describe` works for the version string
+      - uses: actions/download-artifact@v8
+        with:
+          name: ccl-bc
+      - uses: actions/download-artifact@v8
+        with:
+          name: checks-intel
+          path: native-checks
+      - name: Install ${{ matrix.host }} and Quicklisp
+        run: ccl-vm/.github/ci/install-hosts.sh ${{ matrix.host }}
+
+      - name: Boot the bundle in the VM
+        run: ccl-vm/.github/ci/vm-smoke.sh ${{ matrix.host }}
+      - name: Checks (nan, float)
+        if: ${{ !cancelled() }}
+        run: ccl-vm/.github/ci/run-checks.sh ${{ matrix.host }} ccl-bc native-checks/float-checks-native.txt
+      - name: Exit status
+        if: ${{ !cancelled() }}
+        run: ccl-vm/.github/ci/vm-exit-status.sh ${{ matrix.host }} ccl-bc
+
+      - name: Generation 1 (rebuild ccl in the VM from the native bundle)
+        id: gen1
+        if: ${{ !cancelled() }}
+        timeout-minutes: 150
+        run: ccl-vm/.github/ci/vm-rebuild.sh ${{ matrix.host }} ccl-bc gen1
+      - name: Checks on generation 1
+        if: ${{ !cancelled() && steps.gen1.outcome == 'success' }}
+        run: ccl-vm/.github/ci/run-checks.sh ${{ matrix.host }} gen1 native-checks/float-checks-native.txt
+      - name: Save generation 1
+        if: ${{ !cancelled() && steps.gen1.outcome == 'success' }}
+        run: tar -czf gen1.tar.gz gen1
+      - if: ${{ !cancelled() && steps.gen1.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: gen1-${{ env.CELL }}
+          path: gen1.tar.gz
+
+      - name: Generation 2 (rebuild ccl in the VM from generation 1)
+        id: gen2
+        if: ${{ !cancelled() && inputs.fixed_point && steps.gen1.outcome == 'success' }}
+        timeout-minutes: 150
+        run: ccl-vm/.github/ci/vm-rebuild.sh ${{ matrix.host }} gen1 gen2
+      - name: Generation 2 must equal generation 1
+        if: ${{ !cancelled() && steps.gen2.outcome == 'success' }}
+        run: ccl-vm/.github/ci/compare-bundles.sh "generation 1=gen1" "generation 2=gen2"
+
+      - name: Keep the logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: vm-logs-${{ env.CELL }}
+          path: |
+            *.log
+            *-checks-*.txt
+
+  # The bundle CCL rebuilds inside the VM mustn't depend on the host lisp or the machine.
+  compare:
+    needs: vm
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: ccl-vm
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: gen1-*
+      - name: Every generation 1 must equal sbcl-intel's
+        env:
+          HOSTS: ${{ inputs.hosts }}
+          MACS: ${{ inputs.macs }}
+        run: |
+          cells=()
+          for h in $(echo "$HOSTS" | tr -d '[]",'); do
+            for m in $(echo "$MACS" | tr -d '[]",'); do cells+=("$h-$m"); done
+          done
+          ref=${cells[0]} others=()
+          for c in "${cells[@]:1}"; do others+=("$c=gen1-$c/gen1.tar.gz"); done
+          ccl-vm/.github/ci/compare-bundles.sh "$ref=gen1-$ref/gen1.tar.gz" "${others[@]}"
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: gen1-diff
+          path: bundle-diff.txt

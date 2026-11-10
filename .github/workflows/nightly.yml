@@ -1,0 +1,32 @@
+# The full suite: native builds on every platform (native.yml), then every VM host on both macs
+# with the generation-2 fixed point (vm.yml).  (cross.yml will be added here.)
+# Dispatch by hand, or push to the ci-nightly branch (tests gzacharias/ccl's ci branch).
+name: Nightly
+
+on:
+  workflow_dispatch:
+    inputs:
+      ccl_ref:
+        description: "gzacharias/ccl branch, tag or commit to build"
+        default: ci
+  push:
+    branches: [ci-nightly]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    uses: ./.github/workflows/native.yml
+    with:
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+
+  vm:
+    needs: native
+    # The VM needs only the canonical bundle, so a failure elsewhere (say, ccl-tests on Linux)
+    # doesn't stop it.
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/vm.yml
+    with:
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+      fixed_point: true
