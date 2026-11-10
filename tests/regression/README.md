@@ -45,4 +45,5 @@ as `NAME.sh native CCL-DIR` or `NAME.sh HOST BUNDLE-DIR`, prints `REGRESSION PAS
 | floats | float negation, signed zeros, NaNs; host arithmetic errors are CCL conditions | ccl-vm f4e6e22, 2719ec2 (#2) |
 | nan | double-float-nan is the same constant everywhere; define-constant with NaNs | ccl 989a3ce9, PR-define-constant |
 | exit-status | the vm script exits with CCL's exit status (VM only) | ccl-vm 67ce367 |
+| equal | EQUAL of equal bignums, ratios, double-floats is T | ccl-vm 59e0aad |
 | cloop-restart | CLOOP runs the listener again after CCL quits (VM only, sbcl and ccl hosts) | ccl-vm 1b99b1b |
