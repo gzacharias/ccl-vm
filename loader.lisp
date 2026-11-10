@@ -36,20 +36,25 @@
   `(handler-bind ((arithmetic-error #'signal-ccl-arithmetic-error))
      ,@body))
 
+;;; ccl clears its toplevel function as part of exiting the toplevel loop,
+;;; *cloop-toplevel-func* stores it permanently so that cloop can be restarted.
+(defvar *cloop-toplevel-func* nil)
+
 (defun cloop ()
   "Runs the CCL listener.  Returns the exit status when CCL exits (see CVM-EXIT)."
-  (unless *ccl-toplevel-func*
+  (unless *cloop-toplevel-func*
     (error "CCL isn't loaded.  Call ~s first." '(load-ccl "bundle-dir")))
+  (unless *ccl-toplevel-func*
+    (setq *ccl-toplevel-func* *cloop-toplevel-func*))
   (let ((*package* *native-package*)) ;; for debugging
     (with-ccl-compiling-setup ()
      (with-ccl-arithmetic-errors
       (catch 'cvm-exit
         ;; What the kernel's toplevel_loop does: call the thread's toplevel function in a catch of
         ;; %TOPLEVEL-CATCH%, (TOPLEVEL) throws there, until the toplevel function is NIL.
-        (loop for fn = *ccl-toplevel-func*
-              while fn
+        (loop while *ccl-toplevel-func*
               do (restart-case (catch (sym-value (ccl '%toplevel-catch%))
-                                 (ccl-funcall fn))
+                                 (ccl-funcall *ccl-toplevel-func*))
                    (restart-cloop () :report (lambda (s) (format s "Restart CVM toplevel"))))))))))
 
 
@@ -96,6 +101,7 @@
           (let ((*load-verbose* t))
             (lap-%cvm-fasload (sym-value (ccl-symbol '*xload-startup-file*))))))))
 
+  (setq *cloop-toplevel-func* *ccl-toplevel-func*)
   ;; The boot is over.  Stop redirecting REQUIRE's to the bc bundle.
   (ccl-funcall (sym-func (ccl 'forget-boot-search-path)))
   ;; Set alternate "ccl:" if requested
