@@ -1,0 +1,34 @@
+# On a push to master: does this ccl-vm still work with the released setup?  Takes the latest
+# release's bundle (ccl-bc.tar.gz) and, on both macs, boots it in the VM on sbcl and ccl, and on
+# sbcl rebuilds ccl in the VM from the ccl sources at bc-<release tag> (vm.yml, without the
+# regression checks).  A change to the bundle format must fail here until the next release.
+name: Released bundle
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "tag=$(gh release view -R $GITHUB_REPOSITORY --json tagName --jq .tagName)" >> "$GITHUB_OUTPUT"
+
+  vm:
+    needs: release
+    uses: ./.github/workflows/vm.yml
+    with:
+      ccl_ref: bc-${{ needs.release.outputs.tag }}
+      release_tag: ${{ needs.release.outputs.tag }}
+      hosts: '["sbcl", "ccl"]'
+      rebuild_hosts: '["sbcl"]'
+      checks: false

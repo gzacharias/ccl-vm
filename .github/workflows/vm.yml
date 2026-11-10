@@ -4,8 +4,10 @@
 # status checks, rebuilds ccl in the VM (generation 1) and runs the checks on generation 1;
 # with fixed_point, also rebuilds from generation 1 (generation 2), which must equal it.  The
 # compare job then requires every cell's generation 1 to be byte-identical.  (Generation 1 is
-# not the native bundle: they differ in every file, ccl-vm#13.)  Called by nightly.yml and
-# quick.yml.  The steps' scripts are in .github/ci/.
+# not the native bundle: they differ in every file, ccl-vm#13.)  Only the rebuild_hosts cells
+# rebuild; without checks, the nan/float and exit status checks are skipped.  With release_tag,
+# the bundle is that release's ccl-bc.tar.gz instead of the artifact.  Called by nightly.yml,
+# quick.yml and released.yml.  The steps' scripts are in .github/ci/.
 name: VM tests
 
 on:
@@ -22,6 +24,18 @@ on:
         description: "JSON list of macs (intel, arm64)"
         type: string
         default: '["intel", "arm64"]'
+      rebuild_hosts:
+        description: "JSON list of the host lisps that also rebuild ccl in the VM"
+        type: string
+        default: '["sbcl", "ccl"]'
+      checks:
+        description: "Run the nan/float and exit status checks"
+        type: boolean
+        default: true
+      release_tag:
+        description: "Use this ccl-vm release's bundle instead of the ccl-bc artifact"
+        type: string
+        default: ''
       fixed_point:
         description: "Also build generation 2 and require it to equal generation 1"
         type: boolean
@@ -53,10 +67,19 @@ jobs:
           ref: ${{ inputs.ccl_ref }}
           path: ccl
           fetch-depth: 0               # full history and tags, so `git describe` works for the version string
-      - uses: actions/download-artifact@v8
+      - if: ${{ inputs.release_tag == '' }}
+        uses: actions/download-artifact@v8
         with:
           name: ccl-bc
-      - uses: actions/download-artifact@v8
+      - name: Download the bundle of release ${{ inputs.release_tag }}
+        if: ${{ inputs.release_tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ inputs.release_tag }}" -R "$GITHUB_REPOSITORY" -p ccl-bc.tar.gz
+          tar -xzf ccl-bc.tar.gz
+      - if: ${{ inputs.checks }}
+        uses: actions/download-artifact@v8
         with:
           name: checks-intel
           path: native-checks
@@ -66,19 +89,19 @@ jobs:
       - name: Boot the bundle in the VM
         run: ccl-vm/.github/ci/vm-smoke.sh ${{ matrix.host }}
       - name: Checks (nan, float)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.checks }}
         run: ccl-vm/.github/ci/run-checks.sh ${{ matrix.host }} ccl-bc native-checks/float-checks-native.txt
       - name: Exit status
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.checks }}
         run: ccl-vm/.github/ci/vm-exit-status.sh ${{ matrix.host }} ccl-bc
 
-      - name: Generation 1 (rebuild ccl in the VM from the native bundle)
+      - name: Generation 1 (rebuild ccl in the VM from the bundle)
         id: gen1
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(fromJSON(inputs.rebuild_hosts), matrix.host) }}
         timeout-minutes: 150
         run: ccl-vm/.github/ci/vm-rebuild.sh ${{ matrix.host }} ccl-bc gen1
       - name: Checks on generation 1
-        if: ${{ !cancelled() && steps.gen1.outcome == 'success' }}
+        if: ${{ !cancelled() && inputs.checks && steps.gen1.outcome == 'success' }}
         run: ccl-vm/.github/ci/run-checks.sh ${{ matrix.host }} gen1 native-checks/float-checks-native.txt
       - name: Save generation 1
         if: ${{ !cancelled() && steps.gen1.outcome == 'success' }}
@@ -122,10 +145,12 @@ jobs:
       - name: Every generation 1 must equal sbcl-intel's
         env:
           HOSTS: ${{ inputs.hosts }}
+          REBUILD_HOSTS: ${{ inputs.rebuild_hosts }}
           MACS: ${{ inputs.macs }}
         run: |
           cells=()
           for h in $(echo "$HOSTS" | tr -d '[]",'); do
+            [[ $REBUILD_HOSTS == *\"$h\"* ]] || continue
             for m in $(echo "$MACS" | tr -d '[]",'); do cells+=("$h-$m"); done
           done
           ref=${cells[0]} others=()
