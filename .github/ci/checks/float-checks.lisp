@@ -15,4 +15,9 @@
 (format t "~&FCHECK SUB0 ~x~%" (fbits (- 0 (identity 0d0))))
 (format t "~&FCHECK FIX ~s ~s~%" (- (identity 5)) (- (identity most-negative-fixnum)))
 (format t "~&FCHECK RATBIG ~s ~s~%" (- (identity 1/3)) (- (identity (expt 2 70))))
+;; Arithmetic errors are CCL conditions that CCL code can handle (in the VM, translated from the host's).
+(format t "~&FCHECK ARITH-DIV0 ~s~%" (handler-case (/ (identity 1) (identity 0)) (division-by-zero () :caught) (error (c) (list :other (type-of c)))))
+(format t "~&FCHECK ARITH-NAN= ~s~%" (handler-case (= (identity ccl::double-float-nan) (identity ccl::double-float-nan)) (floating-point-invalid-operation () :caught) (error (c) (list :other (type-of c)))))
+(format t "~&FCHECK ARITH-NAN< ~s~%" (handler-case (< (identity ccl::double-float-nan) 1d0) (floating-point-invalid-operation () :caught) (error (c) (list :other (type-of c)))))
+(format t "~&FCHECK ARITH-OVF ~s~%" (handler-case (* (identity most-positive-double-float) 10d0) (floating-point-overflow () :caught) (error (c) (list :other (type-of c)))))
 (format t "~&FCHECK DONE~%")

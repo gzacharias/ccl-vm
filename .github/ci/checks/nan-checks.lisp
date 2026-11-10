@@ -12,15 +12,18 @@
   (format t "~&CHECK GENSYMS-PER-COMPILE ~s~%"
           (let ((before *gensym-counter*)) (compile nil '(lambda (x) (car x))) (- *gensym-counter* before)))
   (format t "~&CHECK DEFINE-CONSTANT-NAN ~s~%"
-          (let ((nan1 (ccl::double-float-from-bits #x7ff80000 0))
-                (nan2 (ccl::double-float-from-bits #xfff80000 0))
+          ;; Fresh NaNs by negation (the VM has no double-float-from-bits): (- (- nan)) has
+          ;; double-float-nan's bits (#x7ff80000 0), (- nan) the sign bit flipped (#xfff80000 0).
+          (flet ((fresh-nan () (- (- (identity ccl::double-float-nan)))))
+          (let ((nan1 (fresh-nan))
+                (nan2 (- (identity ccl::double-float-nan)))
                 (sym (gensym)))
             (ccl::define-constant sym nan1)
             (list (let ((ccl::*cerror-on-constant-redefinition* t))
-                    (handler-case (progn (ccl::define-constant sym (ccl::double-float-from-bits #x7ff80000 0))
+                    (handler-case (progn (ccl::define-constant sym (fresh-nan))
                                          (eq (symbol-value sym) nan1))
                       (error (c) (type-of c))))
                   (let ((ccl::*cerror-on-constant-redefinition* nil))
                     (handler-case (progn (ccl::define-constant sym nan2) (eq (symbol-value sym) nan2))
-                      (error (c) (type-of c)))))))
+                      (error (c) (type-of c))))))))
   (format t "~&CHECK-DONE~%"))
