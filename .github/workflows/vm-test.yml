@@ -76,7 +76,13 @@ jobs:
           gh release download "$tag" -R gzacharias/ccl-vm -p ccl-bc.tar.gz -O release-bc.tar.gz
           COMPARE_LEVEL=warning ccl-vm/.github/ci/compare-bundles.sh \
             "release $tag=release-bc.tar.gz" "this bundle=ccl-bc.tar.gz" | tee compare.txt
-          { echo "### Bundle vs release $tag"; echo '```'; grep -v '^[<>]' compare.txt | head -60; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f bundle-diff.txt ]; then
+            msg="The $tag release asset ccl-bc.tar.gz does not match this bc-compiler: if this is what users get from GitHub, replace the asset with this run's ccl-bc artifact."
+            echo "::warning::$msg"
+          else
+            msg="The $tag release asset ccl-bc.tar.gz matches this bc-compiler."
+          fi
+          { echo "### Bundle vs release $tag"; echo "$msg"; echo '```'; grep -v '^[<>]' compare.txt | head -60; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Keep the differences
         if: ${{ hashFiles('bundle-diff.txt') != '' }}
