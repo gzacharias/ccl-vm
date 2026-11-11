@@ -2,8 +2,10 @@
 # usage: compare-bundles.sh REF-LABEL=REF LABEL=BUNDLE...
 # Checks that every BUNDLE is byte-identical to REF.  Each is a bundle directory or a .tar.gz of
 # one (unpacked into a temporary directory).  A missing BUNDLE counts as a failure.  Appends the
-# differences to bundle-diff.txt.
+# differences to bundle-diff.txt.  With COMPARE_LEVEL=warning, differences are ::warning::
+# annotations and don't make the exit status nonzero (a missing bundle still does).
 set -u
+level=${COMPARE_LEVEL:-error}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 # Prints the bundle directory for $1 (unpacking a tarball), or nothing if it doesn't exist.
@@ -32,9 +34,9 @@ for arg in "$@"; do
   if diff -r "$ref" "$dir" > "$tmp/diff"; then
     echo "$label: byte-identical to $ref_label ($(count "$dir") files)"
   else
-    echo "::error::$label differs from $ref_label ($(grep -c '^diff\|^Only in' "$tmp/diff") files)"
+    echo "::$level::$label differs from $ref_label ($(grep -c '^diff\|^Only in' "$tmp/diff") files)"
     { echo "=== $label vs $ref_label"; cat "$tmp/diff"; } >> bundle-diff.txt
-    status=1
+    [ "$level" = error ] && status=1
   fi
 done
 [ -f bundle-diff.txt ] && head -200 bundle-diff.txt

@@ -11,6 +11,10 @@ on:
         description: "gzacharias/ccl branch, tag or commit to build"
         type: string
         required: true
+      ccl_vm_ref:
+        description: "ccl-vm commit for the scripts (default: the caller's commit; set it when the caller is in another repository)"
+        type: string
+        default: ""
 
 jobs:
   bundle:
@@ -27,6 +31,8 @@ jobs:
       - name: Check out ccl-vm
         uses: actions/checkout@v7
         with:
+          repository: gzacharias/ccl-vm
+          ref: ${{ inputs.ccl_vm_ref || github.sha }}
           path: ccl-vm
 
       - name: Install 1.14 bootstrapping binaries

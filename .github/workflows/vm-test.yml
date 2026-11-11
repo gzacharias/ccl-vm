@@ -2,7 +2,9 @@
 # (bundle.yml), then in parallel runs ccl-tests on the native build and tests the bundle in
 # ccl-vm on an Intel mac: boots it on sbcl and on ccl 1.14, and on sbcl rebuilds ccl in the VM
 # and cross-compiles a native ccl from it.  The longer tests are in vm-extended.yml.
-# A push to the ci branch tests gzacharias/ccl's ci branch and runs every step.
+# A push to the ci branch tests gzacharias/ccl's ci branch and runs every step; so does a push
+# to gzacharias/ccl's bc-compiler, whose bc-compiler.yml calls this workflow.  The release-bundle
+# job reports (as a warning, not a failure) whether the bundle matches the latest release's.
 # (Run workflow only shows up once this file is on the default branch.)
 # The steps' scripts are in .github/ci/.
 name: Build bundle and test VM
@@ -23,18 +25,65 @@ on:
         default: false
   push:
     branches: [ci]
+  workflow_call:
+    inputs:
+      ccl_ref:
+        description: "gzacharias/ccl commit to build"
+        type: string
+        required: true
+      ccl_vm_ref:
+        description: "ccl-vm commit for the scripts (the caller is in another repository)"
+        type: string
+        required: true
 
 permissions:
   contents: read
 
 env:
   CCL_REF: ${{ inputs.ccl_ref || 'ci' }}
+  # The scripts' commit: github.sha is the caller's when called from gzacharias/ccl.
+  CCL_VM_REF: ${{ inputs.ccl_vm_ref || github.sha }}
 
 jobs:
   bundle:
     uses: ./.github/workflows/bundle.yml
     with:
       ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+      ccl_vm_ref: ${{ inputs.ccl_vm_ref || github.sha }}
+
+  # Is the bundle byte-identical to the one in the latest ccl-vm release?
+  release-bundle:
+    needs: bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out ccl-vm
+        uses: actions/checkout@v7
+        with:
+          repository: gzacharias/ccl-vm
+          ref: ${{ env.CCL_VM_REF }}
+          path: ccl-vm
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ccl-bc
+
+      - name: Compare with the latest release's bundle
+        shell: bash   # pipefail: a harness failure in compare-bundles.sh still fails the step
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view -R gzacharias/ccl-vm --json tagName --jq .tagName)
+          gh release download "$tag" -R gzacharias/ccl-vm -p ccl-bc.tar.gz -O release-bc.tar.gz
+          COMPARE_LEVEL=warning ccl-vm/.github/ci/compare-bundles.sh \
+            "release $tag=release-bc.tar.gz" "this bundle=ccl-bc.tar.gz" | tee compare.txt
+          { echo "### Bundle vs release $tag"; echo '```'; grep -v '^[<>]' compare.txt | head -60; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the differences
+        if: ${{ hashFiles('bundle-diff.txt') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-bundle-diff
+          path: bundle-diff.txt
 
   # Runs alongside the vm job, so the VM tests don't wait for ccl-tests.
   ccl-tests:
@@ -51,6 +100,8 @@ jobs:
       - name: Check out ccl-vm
         uses: actions/checkout@v7
         with:
+          repository: gzacharias/ccl-vm
+          ref: ${{ env.CCL_VM_REF }}
           path: ccl-vm
 
       - name: Run ccl-tests on the native build
@@ -70,6 +121,8 @@ jobs:
       - name: Check out ccl-vm
         uses: actions/checkout@v7
         with:
+          repository: gzacharias/ccl-vm
+          ref: ${{ env.CCL_VM_REF }}
           path: ccl-vm
 
       - name: Check out ccl sources (for rebuild and cross-compile)
