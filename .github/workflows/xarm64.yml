@@ -108,7 +108,7 @@ jobs:
       fail-fast: false
       matrix:
         source: [native, vm-sbcl, vm-ccl]
-    runs-on: macos-latest
+    runs-on: ${{ vars.ARM64_MACOS_RUNNER || 'macos-latest' }}
     timeout-minutes: 90
     env:
       CCL_TESTS_REF: ${{ needs.baseline.outputs.ccl_tests_ref }}

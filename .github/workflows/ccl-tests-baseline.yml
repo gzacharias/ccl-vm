@@ -56,7 +56,7 @@ jobs:
       matrix:
         label: ${{ fromJSON(inputs.labels) }}
     # The GitHub runner for each platform label (runs-on can't see env).
-    runs-on: ${{ fromJSON('{"intel":"macos-15-intel","arm64":"macos-latest","linux-x86":"ubuntu-latest","linux-arm64":"ubuntu-24.04-arm"}')[matrix.label] }}
+    runs-on: ${{ matrix.label == 'arm64' && (vars.ARM64_MACOS_RUNNER || 'macos-latest') || fromJSON('{"intel":"macos-15-intel","linux-x86":"ubuntu-latest","linux-arm64":"ubuntu-24.04-arm"}')[matrix.label] }}
     timeout-minutes: 150
     env:
       UPSTREAM_BASE: ${{ needs.refs.outputs.upstream_base }}

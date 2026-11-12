@@ -48,7 +48,7 @@ jobs:
         host: ${{ fromJSON(inputs.hosts) }}
         mac: ${{ fromJSON(inputs.macs) }}
     # (runs-on can't see env.)
-    runs-on: ${{ fromJSON('{"intel":"macos-15-intel","arm64":"macos-latest"}')[matrix.mac] }}
+    runs-on: ${{ matrix.mac == 'arm64' && (vars.ARM64_MACOS_RUNNER || 'macos-latest') || 'macos-15-intel' }}
     timeout-minutes: 330
     env:
       CELL: ${{ matrix.host }}-${{ matrix.mac }}

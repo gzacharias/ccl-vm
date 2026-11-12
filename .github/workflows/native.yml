@@ -49,8 +49,9 @@ jobs:
       fail-fast: false
       matrix:
         label: ${{ fromJSON(inputs.platforms || '["intel", "arm64", "linux-x86", "linux-arm64"]') }}
-    # The GitHub runner for each platform label (runs-on can't see env).
-    runs-on: ${{ fromJSON('{"intel":"macos-15-intel","arm64":"macos-latest","linux-x86":"ubuntu-latest","linux-arm64":"ubuntu-24.04-arm"}')[matrix.label] }}
+    # The GitHub runner for each platform label (runs-on can't see env).  The macOS arm64 runner
+    # is the repository variable ARM64_MACOS_RUNNER (default macos-latest) in all workflows.
+    runs-on: ${{ matrix.label == 'arm64' && (vars.ARM64_MACOS_RUNNER || 'macos-latest') || fromJSON('{"intel":"macos-15-intel","linux-x86":"ubuntu-latest","linux-arm64":"ubuntu-24.04-arm"}')[matrix.label] }}
     timeout-minutes: 150
     steps:
       - name: Check out bc-compiler
@@ -153,7 +154,7 @@ jobs:
       matrix:
         label: ${{ fromJSON(inputs.platforms || '["intel", "arm64", "linux-x86", "linux-arm64"]') }}
     # The GitHub runner for each platform label (runs-on can't see env).
-    runs-on: ${{ fromJSON('{"intel":"macos-15-intel","arm64":"macos-latest","linux-x86":"ubuntu-latest","linux-arm64":"ubuntu-24.04-arm"}')[matrix.label] }}
+    runs-on: ${{ matrix.label == 'arm64' && (vars.ARM64_MACOS_RUNNER || 'macos-latest') || fromJSON('{"intel":"macos-15-intel","linux-x86":"ubuntu-latest","linux-arm64":"ubuntu-24.04-arm"}')[matrix.label] }}
     timeout-minutes: 90
     env:
       CCL_TESTS_REF: ${{ needs.baseline.outputs.ccl_tests_ref }}

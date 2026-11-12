@@ -50,7 +50,7 @@ jobs:
           - { host: native, mac: intel, target: darwinx8664 }
           - { host: native, mac: arm64, target: darwinarm64 }
     # (runs-on can't see env.)
-    runs-on: ${{ fromJSON('{"intel":"macos-15-intel","arm64":"macos-latest"}')[matrix.mac] }}
+    runs-on: ${{ matrix.mac == 'arm64' && (vars.ARM64_MACOS_RUNNER || 'macos-latest') || 'macos-15-intel' }}
     timeout-minutes: 240
     env:
       CELL: ${{ matrix.host }}-${{ matrix.mac }}-${{ matrix.target }}
@@ -111,7 +111,7 @@ jobs:
           - { host: native, mac: intel, target: darwinx8664 }
           - { host: native, mac: arm64, target: darwinarm64 }
     # On a machine of the target's kind.
-    runs-on: ${{ fromJSON('{"darwinx8664":"macos-15-intel","darwinarm64":"macos-latest"}')[matrix.target] }}
+    runs-on: ${{ matrix.target == 'darwinarm64' && (vars.ARM64_MACOS_RUNNER || 'macos-latest') || 'macos-15-intel' }}
     timeout-minutes: 180
     env:
       CELL: ${{ matrix.host }}-${{ matrix.mac }}-${{ matrix.target }}

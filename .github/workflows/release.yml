@@ -27,7 +27,7 @@ jobs:
       matrix:
         host: [sbcl, ccl]
         mac: [intel, arm64]
-    runs-on: ${{ fromJSON('{"intel":"macos-15-intel","arm64":"macos-latest"}')[matrix.mac] }}
+    runs-on: ${{ matrix.mac == 'arm64' && (vars.ARM64_MACOS_RUNNER || 'macos-latest') || 'macos-15-intel' }}
     timeout-minutes: 60
     steps:
       # Only for the scripts that install the host lisp; the README is followed with a fresh clone.

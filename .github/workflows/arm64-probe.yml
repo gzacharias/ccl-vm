@@ -34,7 +34,7 @@ jobs:
     needs: intel
     uses: ./.github/workflows/native-probe.yml
     with:
-      runner: macos-latest
+      runner: ${{ vars.ARM64_MACOS_RUNNER || 'macos-latest' }}
       ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
       strict: false
       label: arm64
@@ -61,7 +61,7 @@ jobs:
     needs: intel
     uses: ./.github/workflows/native-probe.yml
     with:
-      runner: macos-latest
+      runner: ${{ vars.ARM64_MACOS_RUNNER || 'macos-latest' }}
       ccl_ref: upstream-base
       strict: false
       label: arm64-upstream
