@@ -1,5 +1,7 @@
-# The full suite: native builds on every platform (native.yml), then, in parallel, every VM host
-# on both macs with the generation-2 fixed point (vm.yml) and every cross-compile (cross.yml).
+# The full suite: native builds on every platform (native.yml), then the canonical bundle,
+# generations 1 and 2 on sbcl on the Intel mac (gen2.yml), then, in parallel, every VM host on both
+# macs on generation 2, with every host's generation 1 compared (vm.yml), and every cross-compile
+# (cross.yml).
 # Dispatch by hand, or push to the ci-nightly branch (tests gzacharias/ccl's ci branch).
 name: Nightly
 
@@ -21,18 +23,25 @@ jobs:
     with:
       ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
 
-  vm:
+  # The VM needs only the native bundle, so a failure elsewhere (say, ccl-tests on Linux) doesn't
+  # stop it.
+  gen2:
     needs: native
-    # The VM needs only the canonical bundle, so a failure elsewhere (say, ccl-tests on Linux)
-    # doesn't stop it.
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/gen2.yml
+    with:
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+
+  vm:
+    needs: gen2
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/vm.yml
     with:
       ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
-      fixed_point: true
+      rebuild_hosts: '["sbcl", "ccl"]'
 
   cross:
-    needs: native
+    needs: [native, gen2]
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/cross.yml
     with:

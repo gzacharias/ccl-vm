@@ -1,7 +1,7 @@
 # Cross-compiles a native darwinarm64 (Apple Silicon) ccl on an Intel mac, three times: with native
-# ccl (the control) and in ccl-vm hosted in sbcl and in ccl.  Then, on Apple Silicon, boots each boot
-# image in the stock 1.14 darwinarm64 kernel, saves a full image and runs ccl-tests on it, and
-# compares the native and VM (sbcl host) cross-compiles' fasls and boot images.
+# ccl (the control) and in ccl-vm hosted in sbcl and in ccl, booted from the canonical bundle
+# (generation 2, gen2.yml).  Then, on Apple Silicon, boots each boot image in the stock 1.14
+# darwinarm64 kernel, saves a full image and runs ccl-tests on it, and compares the native and VM (sbcl host) cross-compiles' fasls and boot images.
 name: Cross-compile to darwinarm64
 
 on:
@@ -20,6 +20,12 @@ permissions:
 jobs:
   bundle:
     uses: ./.github/workflows/bundle.yml
+    with:
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+
+  gen2:
+    needs: bundle
+    uses: ./.github/workflows/gen2.yml
     with:
       ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
 
@@ -51,7 +57,7 @@ jobs:
           path: "*.log"
 
   vm-xc:
-    needs: bundle
+    needs: gen2
     strategy:
       fail-fast: false
       matrix:
@@ -71,7 +77,7 @@ jobs:
           fetch-depth: 0               # tags, for the version string
       - uses: actions/download-artifact@v8
         with:
-          name: ccl-bc
+          name: ccl-bc-gen2
       - name: Install ${{ matrix.host }} and Quicklisp
         run: ccl-vm/.github/ci/install-hosts.sh ${{ matrix.host }}
       - name: Cross-compile in the VM (${{ matrix.host }} host)

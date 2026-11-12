@@ -1,13 +1,13 @@
 # VM hosts (matrix C): {sbcl, ccl 1.14} x {Intel, Apple Silicon mac}, all on the canonical bundle
-# (artifact ccl-bc, from native.yml in the same run).  Each cell boots the bundle (smoke), runs the
-# regression tests (tests/regression), rebuilds ccl in the VM (generation 1) and runs the
-# regression tests on generation 1;
-# with fixed_point, also rebuilds from generation 1 (generation 2), which must equal it.  The
-# compare job then requires every cell's generation 1 to be byte-identical.  (Generation 1 is
-# not the native bundle: they differ in every file, ccl-vm#13.)  Only the rebuild_hosts cells
-# rebuild; without checks, the regression tests are skipped.  With release_tag,
-# the bundle is that release's ccl-bc.tar.gz instead of the artifact.  Called by nightly.yml,
-# quick.yml and released.yml.  The steps' scripts are in .github/ci/.
+# (artifact ccl-bc-gen2, from gen2.yml in the same run).  Each cell boots the bundle (smoke) and
+# runs the regression tests (tests/regression).  The rebuild_hosts cells also rebuild ccl in the VM
+# from the native bundle (artifact ccl-bc), making their own generation 1, and the compare job
+# requires every one to be byte-identical to sbcl-intel's (artifact gen1-sbcl-intel, from
+# gen2.yml, which sbcl-intel doesn't redo).  That is why only sbcl-intel's generation 2 is booted
+# and tested: every host would have built the same one.  Without checks, the regression tests are
+# skipped.  With release_tag, the bundle is that release's ccl-bc.tar.gz instead, the
+# rebuild_hosts cells rebuild from it (sbcl-intel too), and there is no artifact from this run.
+# Called by nightly.yml, quick.yml and released.yml.  The steps' scripts are in .github/ci/.
 name: VM tests
 
 on:
@@ -25,9 +25,9 @@ on:
         type: string
         default: '["intel", "arm64"]'
       rebuild_hosts:
-        description: "JSON list of the host lisps that also rebuild ccl in the VM"
+        description: "JSON list of the host lisps that also rebuild ccl in the VM, for the cross-host comparison"
         type: string
-        default: '["sbcl", "ccl"]'
+        default: '[]'
       checks:
         description: "Run the regression tests (tests/regression)"
         type: boolean
@@ -36,10 +36,6 @@ on:
         description: "Use this ccl-vm release's bundle instead of the ccl-bc artifact"
         type: string
         default: ''
-      fixed_point:
-        description: "Also build generation 2 and require it to equal generation 1"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -67,17 +63,16 @@ jobs:
           ref: ${{ inputs.ccl_ref }}
           path: ccl
           fetch-depth: 0               # full history and tags, so `git describe` works for the version string
-      - if: ${{ inputs.release_tag == '' }}
+      - name: Get the canonical bundle
+        if: ${{ inputs.release_tag == '' }}
         uses: actions/download-artifact@v8
         with:
-          name: ccl-bc
+          name: ccl-bc-gen2
       - name: Download the bundle of release ${{ inputs.release_tag }}
         if: ${{ inputs.release_tag != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download "${{ inputs.release_tag }}" -R "$GITHUB_REPOSITORY" -p ccl-bc.tar.gz
-          tar -xzf ccl-bc.tar.gz
+        run: gh release download "${{ inputs.release_tag }}" -R "$GITHUB_REPOSITORY" -p ccl-bc.tar.gz
       - name: Install ${{ matrix.host }} and Quicklisp
         run: ccl-vm/.github/ci/install-hosts.sh ${{ matrix.host }}
 
@@ -87,14 +82,27 @@ jobs:
         if: ${{ !cancelled() && inputs.checks }}
         run: ccl-vm/tests/regression/run.sh ${{ matrix.host }} ccl-bc
 
-      - name: Generation 1 (rebuild ccl in the VM from the bundle)
+      # From the native bundle, or with release_tag from the release's.  gen2.yml has made
+      # sbcl-intel's from the native bundle.
+      - name: Get the native bundle
+        id: native
+        if: ${{ !cancelled() && contains(fromJSON(inputs.rebuild_hosts), matrix.host) && inputs.release_tag == '' && env.CELL != 'sbcl-intel' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ccl-bc
+          path: native
+      - name: Generation 1 (rebuild ccl in the VM)
         id: gen1
-        if: ${{ !cancelled() && contains(fromJSON(inputs.rebuild_hosts), matrix.host) }}
+        if: ${{ !cancelled() && contains(fromJSON(inputs.rebuild_hosts), matrix.host) && (inputs.release_tag != '' || steps.native.outcome == 'success') }}
         timeout-minutes: 150
-        run: ccl-vm/.github/ci/vm-rebuild.sh ${{ matrix.host }} ccl-bc gen1
-      - name: Regression tests on generation 1
-        if: ${{ !cancelled() && inputs.checks && steps.gen1.outcome == 'success' }}
-        run: ccl-vm/tests/regression/run.sh ${{ matrix.host }} gen1
+        run: |
+          if [ -f native/ccl-bc.tar.gz ]; then
+            tar -xzf native/ccl-bc.tar.gz -C native
+            from=native/ccl-bc
+          else
+            from=ccl-bc
+          fi
+          ccl-vm/.github/ci/vm-rebuild.sh ${{ matrix.host }} $from gen1
       - name: Save generation 1
         if: ${{ !cancelled() && steps.gen1.outcome == 'success' }}
         run: tar -czf gen1.tar.gz gen1
@@ -103,15 +111,6 @@ jobs:
         with:
           name: gen1-${{ env.CELL }}
           path: gen1.tar.gz
-
-      - name: Generation 2 (rebuild ccl in the VM from generation 1)
-        id: gen2
-        if: ${{ !cancelled() && inputs.fixed_point && steps.gen1.outcome == 'success' }}
-        timeout-minutes: 150
-        run: ccl-vm/.github/ci/vm-rebuild.sh ${{ matrix.host }} gen1 gen2
-      - name: Generation 2 must equal generation 1
-        if: ${{ !cancelled() && steps.gen2.outcome == 'success' }}
-        run: ccl-vm/.github/ci/compare-bundles.sh "generation 1=gen1" "generation 2=gen2"
 
       - name: Keep the logs
         if: ${{ always() }}
@@ -123,9 +122,10 @@ jobs:
             regression-*/
 
   # The bundle CCL rebuilds inside the VM mustn't depend on the host lisp or the machine.
+  # Without release_tag, the reference is gen2.yml's generation 1 (sbcl-intel).
   compare:
     needs: vm
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && inputs.rebuild_hosts != '[]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -140,14 +140,14 @@ jobs:
           REBUILD_HOSTS: ${{ inputs.rebuild_hosts }}
           MACS: ${{ inputs.macs }}
         run: |
-          cells=()
+          others=()
           for h in $(echo "$HOSTS" | tr -d '[]",'); do
             [[ $REBUILD_HOSTS == *\"$h\"* ]] || continue
-            for m in $(echo "$MACS" | tr -d '[]",'); do cells+=("$h-$m"); done
+            for m in $(echo "$MACS" | tr -d '[]",'); do
+              [ $h-$m = sbcl-intel ] || others+=("$h-$m=gen1-$h-$m/gen1.tar.gz")
+            done
           done
-          ref=${cells[0]} others=()
-          for c in "${cells[@]:1}"; do others+=("$c=gen1-$c/gen1.tar.gz"); done
-          ccl-vm/.github/ci/compare-bundles.sh "$ref=gen1-$ref/gen1.tar.gz" "${others[@]}"
+          ccl-vm/.github/ci/compare-bundles.sh "sbcl-intel=gen1-sbcl-intel/gen1.tar.gz" "${others[@]}"
       - if: ${{ failure() }}
         uses: actions/upload-artifact@v7
         with:

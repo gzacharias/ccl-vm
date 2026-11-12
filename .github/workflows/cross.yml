@@ -1,9 +1,10 @@
 # Cross-compiles (hosts C x targets): every VM host ({sbcl, ccl} x {Intel, Apple Silicon mac})
 # cross-compiles a native ccl for each target (darwinx8664, darwinarm64) from the canonical bundle
-# (artifact ccl-bc, from native.yml in the same run); as the control, the other mac's native build
-# (artifact ccl-native-LABEL) cross-compiles it too.  Then on a machine of the target's kind,
+# (artifact ccl-bc-gen2, from gen2.yml in the same run); as the control, the other mac's native
+# build (artifact ccl-native-LABEL) cross-compiles it too.  Then on a machine of the target's kind,
 # each result boots in the stock 1.14 kernel, runs ccl-tests, and closes the loop: the booted
-# image rebuilds ccl and compiles the bc bundle, which must equal the canonical bundle.  Last,
+# image rebuilds ccl and compiles the bc bundle, which must equal the native bundle (artifact
+# ccl-bc, from native.yml: like it, natively compiled).  Last,
 # each VM cross-compile is compared with the native control: a different set of fasls fails,
 # differing contents are warnings (known, ccl-vm#13).  Called by nightly.yml.
 # The steps' scripts are in .github/ci/.
@@ -71,7 +72,7 @@ jobs:
       - if: ${{ matrix.host != 'native' }}
         uses: actions/download-artifact@v8
         with:
-          name: ccl-bc
+          name: ccl-bc-gen2
       - name: Install ${{ matrix.host }} and Quicklisp
         if: ${{ matrix.host != 'native' }}
         run: ccl-vm/.github/ci/install-hosts.sh ${{ matrix.host }}
@@ -123,7 +124,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: ccl-bc
-          path: canonical
+          path: native-bundle
       - name: Boot in the stock 1.14 kernel and save a full image
         id: boot
         run: |
@@ -135,7 +136,7 @@ jobs:
         run: |
           . ccl-vm/.github/ci/platform.sh
           ccl-vm/.github/ci/ccl-tests.sh ccl/$CCL_KERNEL
-      # Closing the loop: the cross-compiled ccl rebuilds itself and makes the canonical bundle.
+      # Closing the loop: the cross-compiled ccl rebuilds itself and makes the native bundle.
       - name: The cross-compiled image rebuilds ccl
         id: rebuild
         if: ${{ !cancelled() && steps.boot.outcome == 'success' }}
@@ -144,9 +145,9 @@ jobs:
         id: bundle
         if: ${{ !cancelled() && steps.rebuild.outcome == 'success' }}
         run: ccl-vm/.github/ci/bc-compile.sh
-      - name: ... which must equal the canonical bundle
+      - name: ... which must equal the native bundle
         if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
-        run: ccl-vm/.github/ci/compare-bundles.sh "canonical=canonical/ccl-bc.tar.gz" "$CELL=ccl-bc.tar.gz"
+        run: ccl-vm/.github/ci/compare-bundles.sh "native=native-bundle/ccl-bc.tar.gz" "$CELL=ccl-bc.tar.gz"
       - if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:

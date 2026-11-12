@@ -1,0 +1,89 @@
+# The canonical bundle: on an Intel mac, the VM on sbcl boots the native bundle (artifact ccl-bc,
+# from native.yml or bundle.yml in the same run) and rebuilds ccl (generation 1), then boots
+# generation 1 and rebuilds again (generation 2), which must equal generation 1.  Generation 2 is
+# the canonical bundle, what a release ships: artifact ccl-bc-gen2 (a ccl-bc.tar.gz that unpacks
+# into ./ccl-bc/, like the release asset).  Every other VM test starts from it.  Generation 1 is
+# kept as artifact gen1-sbcl-intel, the reference for vm.yml's cross-host comparison.  (Generation
+# 1 is not the native bundle: they differ in every file, ccl-vm#13.)  Called by quick.yml,
+# nightly.yml, vm-test.yml and vm-extended.yml.  The steps' scripts are in .github/ci/.
+name: Canonical bundle
+
+on:
+  workflow_call:
+    inputs:
+      ccl_ref:
+        type: string
+        required: true
+      ccl_vm_ref:
+        description: "ccl-vm commit for the scripts (default: the caller's commit; set it when the caller is in another repository)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  gen2:
+    runs-on: macos-15-intel
+    timeout-minutes: 330
+    steps:
+      - name: Check out ccl-vm
+        uses: actions/checkout@v7
+        with:
+          repository: gzacharias/ccl-vm
+          ref: ${{ inputs.ccl_vm_ref || github.sha }}
+          path: ccl-vm
+      - name: Check out the ccl sources (for rebuild-ccl)
+        uses: actions/checkout@v7
+        with:
+          repository: gzacharias/ccl
+          ref: ${{ inputs.ccl_ref }}
+          path: ccl
+          fetch-depth: 0               # full history and tags, so `git describe` works for the version string
+      - uses: actions/download-artifact@v8
+        with:
+          name: ccl-bc
+      - name: Install sbcl and Quicklisp
+        run: ccl-vm/.github/ci/install-hosts.sh sbcl
+
+      - name: Generation 1 (rebuild ccl in the VM from the native bundle)
+        timeout-minutes: 150
+        run: ccl-vm/.github/ci/vm-rebuild.sh sbcl ccl-bc gen1
+      - name: Save generation 1
+        run: tar -czf gen1.tar.gz gen1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gen1-sbcl-intel
+          path: gen1.tar.gz
+
+      - name: Generation 2 (rebuild ccl in the VM from generation 1)
+        id: gen2
+        timeout-minutes: 150
+        run: ccl-vm/.github/ci/vm-rebuild.sh sbcl gen1 gen2
+      - name: Generation 2 must equal generation 1
+        run: ccl-vm/.github/ci/compare-bundles.sh "generation 1=gen1" "generation 2=gen2"
+      - if: ${{ failure() && hashFiles('bundle-diff.txt') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: gen2-diff
+          path: bundle-diff.txt
+
+      # Packed like the native bundle and the release asset: ccl-bc.tar.gz holding ccl-bc/.  Even
+      # if it differs from generation 1 (this job still fails), so the other tests run on it.
+      - name: Pack generation 2 as the canonical bundle
+        if: ${{ !cancelled() && steps.gen2.outcome == 'success' }}
+        run: |
+          mkdir canonical && cp -R gen2 canonical/ccl-bc
+          tar -czf canonical/ccl-bc.tar.gz -C canonical ccl-bc
+      - if: ${{ !cancelled() && steps.gen2.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ccl-bc-gen2
+          path: canonical/ccl-bc.tar.gz
+
+      - name: Keep the logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: gen2-logs
+          path: "*.log"

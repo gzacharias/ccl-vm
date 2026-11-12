@@ -1,8 +1,8 @@
 # Native platforms (matrix A): on Intel and Apple Silicon macs and x86-64 and arm64 Linux, builds
 # bc-compiler from the ccl 1.14 binaries (twice; the second rebuild must be warning-free), runs
 # ccl-tests on the native build and compiles the bc bundle.  The compare job then requires every
-# platform's bundle to be byte-identical, and uploads the Intel mac one as the canonical bundle
-# (artifact ccl-bc) for vm.yml and cross.yml.  Every cell runs to the end even if another fails.
+# platform's bundle to be byte-identical, and uploads the Intel mac one as the native bundle
+# (artifact ccl-bc), from which gen2.yml makes the canonical bundle.  Every cell runs to the end even if another fails.
 # If any build or ccl-tests fails, the control job builds upstream-base (the upstream ccl that
 # bc-compiler is merged with) the same way, to tell our problems from upstream's.  The platforms
 # input picks a subset of the labels (the quick check uses the two macs).  Artifacts: ccl-bc-LABEL, ccl-native-LABEL (the native build), logs-LABEL, ccl-bc.

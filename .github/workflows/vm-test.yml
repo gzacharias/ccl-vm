@@ -1,10 +1,12 @@
-# The quick check (about 30 minutes): builds bc-compiler natively and compiles the bc bundle
-# (bundle.yml), then in parallel runs ccl-tests on the native build and tests the bundle in
-# ccl-vm on an Intel mac: boots it on sbcl and on ccl 1.14, and on sbcl rebuilds ccl in the VM
-# and cross-compiles a native ccl from it.  The longer tests are in vm-extended.yml.
+# The quick check: builds bc-compiler natively and compiles the native bc bundle (bundle.yml),
+# makes the canonical bundle from it, generations 1 and 2 on sbcl (gen2.yml), then in parallel
+# runs ccl-tests on the native build and tests generation 2 in ccl-vm on an Intel mac: boots it on
+# sbcl and on ccl 1.14, and on sbcl cross-compiles a native ccl from it.  The longer tests are in
+# vm-extended.yml.
 # A push to the ci branch tests gzacharias/ccl's ci branch and runs every step; so does a push
 # to gzacharias/ccl's bc-compiler, whose bc-compiler.yml calls this workflow.  The release-bundle
-# job reports (as a warning, not a failure) whether the bundle matches the latest release's.
+# job reports (as a warning, not a failure) whether generation 2 matches the latest release's
+# bundle.
 # (Run workflow only shows up once this file is on the default branch.)
 # The steps' scripts are in .github/ci/.
 name: Build bundle and test VM
@@ -15,10 +17,6 @@ on:
       ccl_ref:
         description: "gzacharias/ccl branch, tag or commit to build"
         default: bc-compiler
-      vm_rebuild:
-        description: "Also run (rebuild-ccl :clean t) inside the VM"
-        type: boolean
-        default: false
       cross_compile:
         description: "Also cross-compile darwinx8664 from the VM and boot the result"
         type: boolean
@@ -51,9 +49,17 @@ jobs:
       ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
       ccl_vm_ref: ${{ inputs.ccl_vm_ref || github.sha }}
 
-  # Is the bundle byte-identical to the one in the latest ccl-vm release?
-  release-bundle:
+  gen2:
     needs: bundle
+    uses: ./.github/workflows/gen2.yml
+    with:
+      ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+      ccl_vm_ref: ${{ inputs.ccl_vm_ref || github.sha }}
+
+  # Is generation 2 byte-identical to the bundle in the latest ccl-vm release?
+  release-bundle:
+    needs: gen2
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out ccl-vm
@@ -65,7 +71,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: ccl-bc
+          name: ccl-bc-gen2
 
       - name: Compare with the latest release's bundle
         shell: bash   # pipefail: a harness failure in compare-bundles.sh still fails the step
@@ -75,9 +81,9 @@ jobs:
           tag=$(gh release view -R gzacharias/ccl-vm --json tagName --jq .tagName)
           gh release download "$tag" -R gzacharias/ccl-vm -p ccl-bc.tar.gz -O release-bc.tar.gz
           COMPARE_LEVEL=warning ccl-vm/.github/ci/compare-bundles.sh \
-            "release $tag=release-bc.tar.gz" "this bundle=ccl-bc.tar.gz" | tee compare.txt
+            "release $tag=release-bc.tar.gz" "generation 2=ccl-bc.tar.gz" | tee compare.txt
           if [ -f bundle-diff.txt ]; then
-            msg="The $tag release asset ccl-bc.tar.gz does not match this bc-compiler: if this is what users get from GitHub, replace the asset with this run's ccl-bc artifact."
+            msg="The $tag release asset ccl-bc.tar.gz does not match this bc-compiler: if this is what users get from GitHub, replace the asset with this run's ccl-bc-gen2 artifact."
             echo "::warning::$msg"
           else
             msg="The $tag release asset ccl-bc.tar.gz matches this bc-compiler."
@@ -121,7 +127,8 @@ jobs:
           path: ccl-tests.log
 
   vm:
-    needs: bundle
+    needs: gen2
+    if: ${{ !cancelled() }}
     runs-on: macos-15-intel
     steps:
       - name: Check out ccl-vm
@@ -131,8 +138,8 @@ jobs:
           ref: ${{ env.CCL_VM_REF }}
           path: ccl-vm
 
-      - name: Check out ccl sources (for rebuild and cross-compile)
-        if: ${{ github.event_name == 'push' || inputs.vm_rebuild || inputs.cross_compile }}
+      - name: Check out ccl sources (for the cross-compile)
+        if: ${{ github.event_name == 'push' || inputs.cross_compile }}
         uses: actions/checkout@v7
         with:
           repository: gzacharias/ccl
@@ -142,7 +149,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: ccl-bc
+          name: ccl-bc-gen2
 
       - name: Install sbcl, ccl 1.14 and Quicklisp
         run: ccl-vm/.github/ci/install-hosts.sh sbcl ccl
@@ -153,10 +160,6 @@ jobs:
       - name: Boot the bundle in the VM (ccl host)
         if: ${{ !cancelled() }}
         run: ccl-vm/.github/ci/vm-smoke.sh ccl
-
-      - name: rebuild-ccl inside the VM
-        if: ${{ github.event_name == 'push' || inputs.vm_rebuild }}
-        run: ccl-vm/.github/ci/vm-rebuild.sh sbcl ccl-bc vm-rebuild
 
       - name: Cross-compile darwinx8664 from the VM
         if: ${{ github.event_name == 'push' || inputs.cross_compile }}
