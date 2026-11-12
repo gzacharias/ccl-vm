@@ -1,6 +1,7 @@
 # The quick check: builds bc-compiler natively and compiles the native bc bundle (bundle.yml),
 # makes the canonical bundle from it, generations 1 and 2 on sbcl (gen2.yml), then in parallel
-# runs ccl-tests on the native build and tests generation 2 in ccl-vm on an Intel mac: boots it on
+# runs ccl-tests on the native build (failing only on tests that pass on upstream-base,
+# ccl-tests-baseline.yml) and tests generation 2 in ccl-vm on an Intel mac: boots it on
 # sbcl and on ccl 1.14, and on sbcl cross-compiles a native ccl from it.  The longer tests are in
 # vm-extended.yml.
 # A push to the ci branch tests gzacharias/ccl's ci branch and runs every step; so does a push
@@ -97,14 +98,26 @@ jobs:
           name: release-bundle-diff
           path: bundle-diff.txt
 
+  baseline:
+    uses: ./.github/workflows/ccl-tests-baseline.yml
+    with:
+      labels: '["intel"]'
+      ccl_vm_ref: ${{ inputs.ccl_vm_ref || github.sha }}
+
   # Runs alongside the vm job, so the VM tests don't wait for ccl-tests.
   ccl-tests:
-    needs: bundle
+    needs: [bundle, baseline]
     runs-on: macos-15-intel
+    env:
+      CCL_TESTS_REF: ${{ needs.baseline.outputs.ccl_tests_ref }}
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: ccl-native
+      - uses: actions/download-artifact@v8
+        with:
+          name: ccl-tests-baseline-intel
+          path: ccl-tests-baseline
 
       - name: Unpack the native build
         run: tar -xzf ccl-native.tar.gz
@@ -116,15 +129,17 @@ jobs:
           ref: ${{ env.CCL_VM_REF }}
           path: ccl-vm
 
-      - name: Run ccl-tests on the native build
-        run: ccl-vm/.github/ci/ccl-tests.sh ccl/dx86cl64
+      - name: Run ccl-tests on the native build, against upstream-base's
+        run: ccl-vm/.github/ci/ccl-tests.sh ccl/dx86cl64 ccl-tests-baseline/ccl-tests-failures.txt
 
       - name: Keep the log
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: ccl-tests-log
-          path: ccl-tests.log
+          path: |
+            ccl-tests.log
+            ccl-tests-failures.txt
 
   vm:
     needs: gen2

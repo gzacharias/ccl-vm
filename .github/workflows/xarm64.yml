@@ -1,7 +1,9 @@
 # Cross-compiles a native darwinarm64 (Apple Silicon) ccl on an Intel mac, three times: with native
 # ccl (the control) and in ccl-vm hosted in sbcl and in ccl, booted from the canonical bundle
 # (generation 2, gen2.yml).  Then, on Apple Silicon, boots each boot image in the stock 1.14
-# darwinarm64 kernel, saves a full image and runs ccl-tests on it, and compares the native and VM (sbcl host) cross-compiles' fasls and boot images.
+# darwinarm64 kernel, saves a full image and runs ccl-tests on it (against upstream-base's
+# results on Apple Silicon, ccl-tests-baseline.yml), and compares the native and VM (sbcl host)
+# cross-compiles' fasls and boot images.
 name: Cross-compile to darwinarm64
 
 on:
@@ -28,6 +30,11 @@ jobs:
     uses: ./.github/workflows/gen2.yml
     with:
       ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+
+  baseline:
+    uses: ./.github/workflows/ccl-tests-baseline.yml
+    with:
+      labels: '["arm64"]'
 
   native-xc:
     needs: bundle
@@ -95,7 +102,7 @@ jobs:
           path: "*.log"
 
   boot:
-    needs: [native-xc, vm-xc]
+    needs: [native-xc, vm-xc, baseline]
     if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
@@ -103,6 +110,8 @@ jobs:
         source: [native, vm-sbcl, vm-ccl]
     runs-on: macos-latest
     timeout-minutes: 90
+    env:
+      CCL_TESTS_REF: ${{ needs.baseline.outputs.ccl_tests_ref }}
     steps:
       - id: get
         continue-on-error: true
@@ -112,6 +121,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: ccl-vm
+      - uses: actions/download-artifact@v8
+        with:
+          name: ccl-tests-baseline-arm64
+          path: ccl-tests-baseline
       - name: Boot the boot image in the stock 1.14 kernel and save a full image
         if: ${{ steps.get.outcome == 'success' }}
         run: |
@@ -120,7 +133,7 @@ jobs:
       - name: Run ccl-tests on the cross-compiled image
         if: ${{ steps.get.outcome == 'success' }}
         timeout-minutes: 60
-        run: ccl-vm/.github/ci/ccl-tests.sh ccl/darm64cl
+        run: ccl-vm/.github/ci/ccl-tests.sh ccl/darm64cl ccl-tests-baseline/ccl-tests-failures.txt
       - if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:

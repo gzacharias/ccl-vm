@@ -46,3 +46,4 @@ jobs:
     uses: ./.github/workflows/cross.yml
     with:
       ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
+      ccl_tests_ref: ${{ needs.native.outputs.ccl_tests_ref }}

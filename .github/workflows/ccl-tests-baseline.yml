@@ -1,0 +1,117 @@
+# The ccl-tests baseline: which ccl-tests fail on upstream-base (the upstream ccl that bc-compiler
+# was last merged with), per platform, so that ccl-tests.sh can fail only on the tests that fail
+# for bc-compiler but not for upstream.  The refs job looks up the current upstream-base commit
+# (gzacharias/ccl) and Clozure/ccl-tests commit; every ccl-tests run in the calling workflow uses
+# that ccl-tests commit (output ccl_tests_ref), so both sides run the same tests.  The baseline
+# is cached under the platform and both commits, so it is rebuilt only after an upstream merge
+# or a ccl-tests change: then upstream-base is built from the ccl 1.14 binaries, as native.yml
+# builds bc-compiler, and runs ccl-tests.  (A cache is visible only on its own branch and from
+# the default branch, so each trigger branch builds its own once.)
+# Artifacts: ccl-tests-baseline-LABEL (its ccl-tests-failures.txt), logs-upstream-LABEL.
+# Called by native.yml, vm-test.yml and xarm64.yml.  The steps' scripts are in .github/ci/.
+name: ccl-tests baseline
+
+on:
+  workflow_call:
+    inputs:
+      labels:
+        description: "JSON list of platform labels (intel, arm64, linux-x86, linux-arm64)"
+        type: string
+        required: true
+      ccl_vm_ref:
+        description: "ccl-vm commit for the scripts (default: the caller's commit; set it when the caller is in another repository)"
+        type: string
+        default: ""
+    outputs:
+      ccl_tests_ref:
+        description: "The Clozure/ccl-tests commit the baseline is for"
+        value: ${{ jobs.refs.outputs.ccl_tests }}
+      upstream_base:
+        description: "The upstream-base commit the baseline is for"
+        value: ${{ jobs.refs.outputs.upstream_base }}
+
+permissions:
+  contents: read
+
+jobs:
+  refs:
+    runs-on: ubuntu-latest
+    outputs:
+      upstream_base: ${{ steps.refs.outputs.upstream_base }}
+      ccl_tests: ${{ steps.refs.outputs.ccl_tests }}
+    steps:
+      - id: refs
+        run: |
+          ub=$(git ls-remote https://github.com/gzacharias/ccl.git refs/heads/upstream-base | cut -f1)
+          ct=$(git ls-remote https://github.com/Clozure/ccl-tests.git HEAD | cut -f1)
+          [ -n "$ub" ] && [ -n "$ct" ] || { echo "::error::can't find upstream-base ($ub) or the ccl-tests commit ($ct)"; exit 1; }
+          echo "upstream_base=$ub" >> "$GITHUB_OUTPUT"
+          echo "ccl_tests=$ct" >> "$GITHUB_OUTPUT"
+          echo "ccl-tests baseline: upstream-base $ub, ccl-tests $ct" >> "$GITHUB_STEP_SUMMARY"
+
+  baseline:
+    needs: refs
+    strategy:
+      fail-fast: false
+      matrix:
+        label: ${{ fromJSON(inputs.labels) }}
+    # The GitHub runner for each platform label (runs-on can't see env).
+    runs-on: ${{ fromJSON('{"intel":"macos-15-intel","arm64":"macos-latest","linux-x86":"ubuntu-latest","linux-arm64":"ubuntu-24.04-arm"}')[matrix.label] }}
+    timeout-minutes: 150
+    env:
+      UPSTREAM_BASE: ${{ needs.refs.outputs.upstream_base }}
+      CCL_TESTS_REF: ${{ needs.refs.outputs.ccl_tests }}
+    steps:
+      - id: cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ccl-tests-baseline
+          key: ccl-tests-baseline-v1-${{ matrix.label }}-${{ env.UPSTREAM_BASE }}-${{ env.CCL_TESTS_REF }}
+
+      - if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/checkout@v7
+        with:
+          repository: gzacharias/ccl
+          ref: ${{ env.UPSTREAM_BASE }}
+          path: ccl
+          fetch-depth: 0               # full history and tags, so `git describe` works for the version string
+      - if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/checkout@v7
+        with:
+          repository: gzacharias/ccl-vm
+          ref: ${{ inputs.ccl_vm_ref || github.sha }}
+          path: ccl-vm
+      - if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: ccl-vm/.github/ci/install-bootstrap.sh
+      - if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: ccl-vm/.github/ci/native-rebuild.sh 1
+      - if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: ccl-vm/.github/ci/native-rebuild.sh 2
+      - name: Run ccl-tests on upstream-base
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        timeout-minutes: 60
+        run: |
+          # Failing tests are the baseline; only a suite that doesn't finish fails this step.
+          ccl-vm/.github/ci/ccl-tests.sh ccl/$CCL_KERNEL || true
+          [ -f ccl-tests-failures.txt ] || exit 1
+          mkdir -p ccl-tests-baseline
+          { echo "# upstream-base $UPSTREAM_BASE"; cat ccl-tests-failures.txt; } > ccl-tests-baseline/ccl-tests-failures.txt
+      - if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ccl-tests-baseline
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - name: The baseline
+        run: |
+          { echo "### ccl-tests failing on upstream-base (${{ matrix.label }})"
+            echo '```'; cat ccl-tests-baseline/ccl-tests-failures.txt; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ccl-tests-baseline-${{ matrix.label }}
+          path: ccl-tests-baseline/ccl-tests-failures.txt
+      - if: ${{ always() && steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: logs-upstream-${{ matrix.label }}
+          path: "*.log"

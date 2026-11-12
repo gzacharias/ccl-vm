@@ -2,11 +2,12 @@
 # cross-compiles a native ccl for each target (darwinx8664, darwinarm64) from the canonical bundle
 # (artifact ccl-bc-gen2, from gen2.yml in the same run); as the control, the other mac's native
 # build (artifact ccl-native-LABEL) cross-compiles it too.  Then on a machine of the target's kind,
-# each result boots in the stock 1.14 kernel, runs ccl-tests, and closes the loop: the booted
-# image rebuilds ccl and compiles the bc bundle, which must equal the native bundle (artifact
-# ccl-bc, from native.yml: like it, natively compiled).  Last,
-# each VM cross-compile is compared with the native control: a different set of fasls fails,
-# differing contents are warnings (known, ccl-vm#13).  Called by nightly.yml.
+# each result boots in the stock 1.14 kernel, runs ccl-tests (against the target platform's
+# upstream-base baseline, artifact ccl-tests-baseline-LABEL from native.yml), and closes the
+# loop: the booted image rebuilds ccl and compiles the bc bundle, which must equal the native
+# bundle (artifact ccl-bc, from native.yml: like it, natively compiled).  Last, each VM
+# cross-compile is compared with the native control: a different set of fasls fails, differing
+# contents are warnings (known, ccl-vm#13).  Called by nightly.yml.
 # The steps' scripts are in .github/ci/.
 name: Cross-compiles
 
@@ -28,6 +29,10 @@ on:
         description: "JSON list of targets"
         type: string
         default: '["darwinx8664", "darwinarm64"]'
+      ccl_tests_ref:
+        description: "The Clozure/ccl-tests commit of the baselines (native.yml's output)"
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -110,6 +115,7 @@ jobs:
     timeout-minutes: 180
     env:
       CELL: ${{ matrix.host }}-${{ matrix.mac }}-${{ matrix.target }}
+      CCL_TESTS_REF: ${{ inputs.ccl_tests_ref }}
     steps:
       - id: get
         continue-on-error: true
@@ -125,6 +131,10 @@ jobs:
         with:
           name: ccl-bc
           path: native-bundle
+      - uses: actions/download-artifact@v8
+        with:
+          name: ccl-tests-baseline-${{ fromJSON('{"darwinx8664":"intel","darwinarm64":"arm64"}')[matrix.target] }}
+          path: ccl-tests-baseline
       - name: Boot in the stock 1.14 kernel and save a full image
         id: boot
         run: |
@@ -135,7 +145,7 @@ jobs:
         timeout-minutes: 60
         run: |
           . ccl-vm/.github/ci/platform.sh
-          ccl-vm/.github/ci/ccl-tests.sh ccl/$CCL_KERNEL
+          ccl-vm/.github/ci/ccl-tests.sh ccl/$CCL_KERNEL ccl-tests-baseline/ccl-tests-failures.txt
       # Closing the loop: the cross-compiled ccl rebuilds itself and makes the native bundle.
       - name: The cross-compiled image rebuilds ccl
         id: rebuild
