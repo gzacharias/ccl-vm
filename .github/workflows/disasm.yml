@@ -37,7 +37,7 @@ jobs:
             (dolist (f cl-user::*fns*)
               (format t "~&~%;;; ~s~%" f)
               (disassemble f)))
-          (format t "~&~a~%~a~%" (lisp-implementation-version) (git-commit-hash))
+          (format t "~&~a~%" (lisp-implementation-version))
           (cl-user::dump "AS BUILT (rebuild-ccl)")
           (dolist (opt '(((speed 0) (safety 3) (debug 3)) ((speed 3) (safety 0) (debug 0))))
             (let ((fasl (format nil "/tmp/dll-~d.dx" (cadr (first opt)))))
