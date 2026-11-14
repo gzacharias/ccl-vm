@@ -1,6 +1,6 @@
-# One-off: ccl.build-time-type-inference's body (.github/dhl.lisp) on darwinarm64, on the ccl
-# 1.14 release and on Clozure/ccl master.  Push to ci-disasm to run.
-name: arm64 build-time-type-inference test
+# One-off: the arm64 subprim-disassembly patch (.github/subprim-disasm.patch) on Clozure/ccl
+# master, on darwinarm64: build, then .github/subprim-test.lisp.  Push to ci-disasm to run.
+name: arm64 subprim disassembly
 
 on:
   push:
@@ -23,17 +23,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: ccl-vm
+      - run: git -C ccl apply ../ccl-vm/.github/subprim-disasm.patch && git -C ccl diff --stat
       - run: ccl-vm/.github/ci/install-bootstrap.sh
-      - name: ccl 1.14 release
-        run: cd ccl && ./$CCL_KERNEL -n -b -l ../ccl-vm/.github/dhl.lisp < /dev/null 2>&1 | tee ../result-1.14.txt
       - run: ccl-vm/.github/ci/native-rebuild.sh 1
       - run: ccl-vm/.github/ci/native-rebuild.sh 2
-      - name: Clozure/ccl master
+      - name: Test
         run: |
-          git -C ccl log --oneline -1
-          cd ccl && ./$CCL_KERNEL -n -b -l ../ccl-vm/.github/dhl.lisp < /dev/null 2>&1 | tee ../result-master.txt
-      - run: cat result-1.14.txt result-master.txt
+          cd ccl && ./$CCL_KERNEL -n -b -l ../ccl-vm/.github/subprim-test.lisp < /dev/null > ../result.txt 2>&1 || true
+          cat ../result.txt
       - uses: actions/upload-artifact@v7
         with:
-          name: dhl
-          path: result-*.txt
+          name: subprim
+          path: result.txt
