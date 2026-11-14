@@ -1,6 +1,6 @@
-# One-off: native darwinarm64 disassembly of some dll-node functions, as built and recompiled with
-# low and high optimization.  Push to ci-disasm to run; output in the disasm artifact.
-name: arm64 disassembly
+# One-off: ccl.build-time-type-inference's body (.github/bti-test.lisp) on darwinarm64, on the ccl
+# 1.14 release and on Clozure/ccl master.  Push to ci-disasm to run.
+name: arm64 build-time-type-inference test
 
 on:
   push:
@@ -10,46 +10,26 @@ permissions:
   contents: read
 
 jobs:
-  disasm:
+  test:
     runs-on: ${{ vars.ARM64_MACOS_RUNNER || 'macos-latest' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: gzacharias/ccl
-          ref: ci
+          repository: Clozure/ccl
+          ref: master
           path: ccl
           fetch-depth: 0
       - uses: actions/checkout@v7
         with:
           path: ccl-vm
       - run: ccl-vm/.github/ci/install-bootstrap.sh
+      - name: ccl 1.14 release
+        run: cd ccl && ./$CCL_KERNEL -n -b -l ../ccl-vm/.github/bti-test.lisp < /dev/null 2>&1 | tee ../result-1.14.txt
       - run: ccl-vm/.github/ci/native-rebuild.sh 1
       - run: ccl-vm/.github/ci/native-rebuild.sh 2
-      - name: Disassemble
+      - name: Clozure/ccl master
         run: |
-          cd ccl
-          ./$CCL_KERNEL -n -b > ../disasm.txt 2>&1 <<'L' || true
-          (in-package "CCL")
-          (defparameter cl-user::*fns* '(dll-header-length insert-dll-node-after remove-dll-node append-dll-node dll-node-position))
-          (defun cl-user::dump (title)
-            (format t "~&~%;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;~%;;;; ~a~%" title)
-            (dolist (f cl-user::*fns*)
-              (format t "~&~%;;; ~s~%" f)
-              (disassemble f)))
-          (format t "~&~a~%" (lisp-implementation-version))
-          (cl-user::dump "AS BUILT (rebuild-ccl)")
-          (dolist (opt '(((speed 0) (safety 3) (debug 3)) ((speed 3) (safety 0) (debug 0))))
-            (let ((fasl (format nil "/tmp/dll-~d.dx" (cadr (first opt)))))
-              (with-compilation-unit (:override t)
-                (proclaim `(optimize ,@opt))
-                (compile-file "ccl:compiler;dll-node.lisp" :output-file fasl)
-                (let ((*warn-if-redefine-kernel* nil) (*warn-if-redefine* nil)) (load fasl)))
-              (cl-user::dump (format nil "RECOMPILED WITH ~s" opt))))
-          (quit)
-          L
-          cat ../disasm.txt
-      - uses: actions/upload-artifact@v7
-        with:
-          name: disasm
-          path: disasm.txt
+          git -C ccl log --oneline -1
+          cd ccl && ./$CCL_KERNEL -n -b -l ../ccl-vm/.github/bti-test.lisp < /dev/null 2>&1 | tee ../result-master.txt
+      - run: grep -h RESULT result-*.txt >> "$GITHUB_STEP_SUMMARY"

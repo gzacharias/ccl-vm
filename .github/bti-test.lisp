@@ -1,0 +1,8 @@
+(in-package "CL-USER")
+(format t "~&RESULT ~a ~s~%" (lisp-implementation-version)
+    (let ((text (with-output-to-string (*standard-output*)
+                  (disassemble 'ccl::dll-header-length))))
+      #+x86-64 (search ".SPBUILTIN-PLUS" text)
+      #+arm64 (search "(blr " text))
+)
+(quit)
