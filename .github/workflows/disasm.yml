@@ -1,4 +1,4 @@
-# One-off: ccl.build-time-type-inference's body (.github/bti-test.lisp) on darwinarm64, on the ccl
+# One-off: ccl.build-time-type-inference's body (.github/mbc-test.lisp) on darwinarm64, on the ccl
 # 1.14 release and on Clozure/ccl master.  Push to ci-disasm to run.
 name: arm64 build-time-type-inference test
 
@@ -25,11 +25,11 @@ jobs:
           path: ccl-vm
       - run: ccl-vm/.github/ci/install-bootstrap.sh
       - name: ccl 1.14 release
-        run: cd ccl && ./$CCL_KERNEL -n -b -l ../ccl-vm/.github/bti-test.lisp < /dev/null 2>&1 | tee ../result-1.14.txt
+        run: cd ccl && ./$CCL_KERNEL -n -b -l ../ccl-vm/.github/mbc-test.lisp < /dev/null 2>&1 | tee ../result-1.14.txt
       - run: ccl-vm/.github/ci/native-rebuild.sh 1
       - run: ccl-vm/.github/ci/native-rebuild.sh 2
       - name: Clozure/ccl master
         run: |
           git -C ccl log --oneline -1
-          cd ccl && ./$CCL_KERNEL -n -b -l ../ccl-vm/.github/bti-test.lisp < /dev/null 2>&1 | tee ../result-master.txt
-      - run: grep -h RESULT result-*.txt >> "$GITHUB_STEP_SUMMARY"
+          cd ccl && ./$CCL_KERNEL -n -b -l ../ccl-vm/.github/mbc-test.lisp < /dev/null 2>&1 | tee ../result-master.txt
+      - run: grep -ah RESULT result-*.txt >> "$GITHUB_STEP_SUMMARY"
