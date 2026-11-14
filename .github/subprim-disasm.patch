@@ -1,4 +1,4 @@
-From 3107f9ff37a124d3e3f3e39c3f00b01ea70678ac Mon Sep 17 00:00:00 2001
+From d8a4727c3661ec1b93b2c4265ce29831182c9dd2 Mon Sep 17 00:00:00 2001
 From: Gail Zacharias <gz@pobox.com>
 Date: Fri, 13 Nov 2026 19:58:57 -0500
 Subject: [PATCH] arm64 disassembler: show subprim calls symbolically
@@ -11,7 +11,7 @@ as the x86, PPC and ARM disassemblers do.
  1 file changed, 39 insertions(+), 3 deletions(-)
 
 diff --git a/compiler/ARM64/arm64-disassemble.lisp b/compiler/ARM64/arm64-disassemble.lisp
-index 465a0831..4e1bfb2d 100644
+index 465a0831..1de958ec 100644
 --- a/compiler/ARM64/arm64-disassemble.lisp
 +++ b/compiler/ARM64/arm64-disassemble.lisp
 @@ -425,6 +425,37 @@
@@ -22,7 +22,7 @@ index 465a0831..4e1bfb2d 100644
 +  ;; A subprim call or jump is
 +  ;;   (movz Rt (:$ offset)) (ldr Rt (:@ rcontext Rt)) (blr Rt) or (br Rt)
 +  ;; Name the subprim in the movz, as other targets' disassemblers do.
-+  (let ((rcontext (svref *registers* rcontext)))
++  (let ((rcontext-register (svref *registers* rcontext)))
 +    (dotimes (i (- (length di-vector) 2) di-vector)
 +      (let* ((mov (svref di-vector i))
 +             (ldr (svref di-vector (+ i 1)))
@@ -39,7 +39,7 @@ index 465a0831..4e1bfb2d 100644
 +                   (memory-operand-p mem)
 +                   (not (memory-operand-pre-indexed mem))
 +                   (not (memory-operand-post-indexed mem))
-+                   (eq (register-operand-register (memory-operand-base mem)) rcontext)
++                   (eq (register-operand-register (memory-operand-base mem)) rcontext-register)
 +                   (same-register-p rt (memory-operand-offset mem))
 +                   (member (di-mnemonic branch) '("blr" "br") :test #'string=)
 +                   (same-register-p rt (first (di-operands branch))))
