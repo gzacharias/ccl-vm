@@ -13,7 +13,7 @@ fi
 prologue="$(cd "$(dirname "$0")" && pwd)/vm-prologue.lisp"
 
 case $host in
-  sbcl) exec ${SBCL:-sbcl} --dynamic-space-size 12GB --control-stack-size 512MB --noinform --non-interactive \
+  sbcl) exec ${SBCL:-sbcl} --dynamic-space-size 12GB --noinform --non-interactive \
              --load "$prologue" --eval "(ccl-vm:load-ccl $args)" --eval '(sb-ext:exit :code (ccl-vm:cloop))' ;;
   ccl)  exec "$CCL_HOST" --no-init --batch \
              --load "$prologue" --eval "(ccl-vm:load-ccl $args)" --eval '(ccl:quit (ccl-vm:cloop))' ;;
