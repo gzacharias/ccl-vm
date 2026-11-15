@@ -17,7 +17,7 @@ input='(quit)
 (format t "~&SECOND-CLOOP ~a~%" (+ 1 2))
 (quit 4)'
 case $where in
-  sbcl) echo "$input" | ${SBCL:-sbcl} --dynamic-space-size 12GB --noinform \
+  sbcl) echo "$input" | "${SBCL:-sbcl}" --dynamic-space-size 12GB --noinform \
           --non-interactive --load "$prologue" --eval "$load" --eval "$first" --eval "$second" ;;
   ccl)  echo "$input" | "$CCL_HOST" --no-init --batch \
           --load "$prologue" --eval "$load" --eval "$first" --eval "$second" --eval '(ccl:quit)' ;;
