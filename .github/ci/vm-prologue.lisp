@@ -3,4 +3,4 @@
 (load "~/quicklisp/setup.lisp")
 (pushnew (merge-pathnames "../../" (make-pathname :name nil :type nil :defaults *load-truename*))
          asdf:*central-registry* :test #'equal)
-(asdf:load-system "ccl-vm")
+(ql:quickload "ccl-vm" :silent t)

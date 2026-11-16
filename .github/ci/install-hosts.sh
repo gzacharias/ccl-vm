@@ -36,11 +36,12 @@ if [ ! -f ~/quicklisp/setup.lisp ]; then
   esac
 fi
 $bare && exit 0
-# Download and compile ccl-vm's dependencies once per host.
+# Download and compile ccl-vm and its dependencies once per host.
+prologue="$(cd "$(dirname "$0")" && pwd)/vm-prologue.lisp"
 for host in "$@"; do
   case $host in
-    sbcl) sbcl --noinform --non-interactive --load ~/quicklisp/setup.lisp --eval '(ql:quickload (list "cffi" "alexandria"))' ;;
-    ccl)  "$CCL_HOST" -n -b -l ~/quicklisp/setup.lisp -e '(ql:quickload (list "cffi" "alexandria"))' -e '(quit)' ;;
+    sbcl) sbcl --noinform --non-interactive --load "$prologue" ;;
+    ccl)  "$CCL_HOST" -n -b -l "$prologue" -e '(quit)' ;;
   esac
 done
 

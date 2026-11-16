@@ -19,7 +19,7 @@ echo "bundle: $(find ccl-bc -name '*.bc' | wc -l | tr -d ' ') bc files, sha256 $
 host_forms=(
   '(load "~/quicklisp/setup.lisp")'
   "(pushnew #P\"$w/ccl-vm/\" asdf:*central-registry* :test #'equal)"
-  '(asdf:load-system "ccl-vm")'
+  '(ql:quickload "ccl-vm")'
   '(format t "~&SYSTEM-DIR ~a~%" (asdf:system-source-directory "ccl-vm"))'
   "(ccl-vm:load-ccl #P\"$w/ccl-bc/\")"
   '(ccl-vm:cloop)')
