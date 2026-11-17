@@ -1,7 +1,7 @@
-;;; Writes ffi-types.lisp, ffi-records.lisp and ffi-constants.lisp: the CFFI definitions of the
-;;; foreign types and records and the values of the OS constants the VM's runtime needs, for each
-;;; platform, found by clang (the ffi-info library).  (Function signatures are maintained by hand,
-;;; in ffi-functions.lisp.)  Load it in a lisp with Quicklisp, ffi-info and clang:
+;;; Writes ffi-types.lisp, ffi-records.lisp, ffi-constants.lisp and ffi-functions.lisp: the CFFI
+;;; definitions of the foreign types and records, the values of the OS constants and the signatures
+;;; of the C functions the VM's runtime needs, for each platform, found by clang (the ffi-info
+;;; library).  Load it in a lisp with Quicklisp, ffi-info and clang:
 ;;;   (load "gen-ffi.lisp")
 ;;;   (ccl-vm-gen-ffi:gen-ffi "/path/to/ccl-vm/" :linux-x86-64-sysroot "..." :linux-arm64-sysroot "...")
 ;;; Darwin's headers come from the SDK; Linux's from sysroots with the targets' usr/include.
@@ -12,9 +12,14 @@
 
 (defpackage "CCL-FFI" (:use))
 
+;; The generated files are printed in ccl-vm's package.
+(defun ccl-vm-package ()
+  (or (find-package "CCL-VM") (make-package "CCL-VM" :use '("COMMON-LISP"))))
+
 (defparameter *headers*
   '("sys/types.h" "sys/stat.h" "sys/time.h" "sys/resource.h" "sys/socket.h" "sys/utsname.h" "dirent.h"
-    "dlfcn.h" "errno.h" "fcntl.h" "unistd.h" "netdb.h" "limits.h" "stdio.h" "stdlib.h"))
+    "dlfcn.h" "errno.h" "fcntl.h" "unistd.h" "netdb.h" "limits.h" "stdio.h" "stdlib.h" "string.h" "time.h"
+    "pwd.h"))
 
 (defparameter *darwin-headers* '("mach/mach.h"))
 
@@ -33,6 +38,12 @@
     "EMFILE" "ERANGE" "EAGAIN" "EADDRINUSE" "EADDRNOTAVAIL" "ENETDOWN" "ENETUNREACH" "ENETRESET"
     "ECONNABORTED" "ECONNRESET" "ENOBUFS" "ESHUTDOWN" "ETIMEDOUT" "ECONNREFUSED" "EHOSTDOWN"
     "EHOSTUNREACH" "_PC_MAX_INPUT" "SOL_SOCKET" "SO_SNDLOWAT" "AF_INET" "AF_INET6" "AF_UNIX"))
+
+;; C functions the bundle calls with #_.
+(defparameter *functions*
+  '("memset" "memmove" "getdtablesize" "nanosleep" "mach_host_self" "host_info" "getpagesize" "sysconf"
+    "getuid" "getenv" "getpwuid_r" "uname" "getcwd" "isatty" "chdir" "fpathconf" "getsockopt" "rename"
+    "unlink" "mkdir" "rmdir" "strerror" "getrusage"))
 
 ;; (features clang-target sysroot-keyword)
 (defparameter *platforms*
@@ -59,7 +70,7 @@
 
 (defun cffi-type (type)
   (if (atom type)
-    (ecase type (:pointer :pointer))
+    (ecase type (:pointer :pointer) (:void :void))
     (ecase (first type)
       (:int (destructuring-bind (bits signed) (rest type)
               (intern (format nil "~:[U~;~]INT~d" signed bits) :keyword)))
@@ -81,12 +92,18 @@
                    (,(record-symbol name) :size ,size)
                    ,@(mapcar #'field-form fields)))
    (loop for (name . value) in (ffi-info:c-info-constants info)
-         collect `(defconstant ,(constant-symbol name) ,value))))
+         collect `(defconstant ,(constant-symbol name) ,value))
+   (loop for (name symbol return-type arg-types variadic) in (ffi-info:c-info-functions info)
+         do (when variadic (error "~a is variadic" name))
+         collect `(,(intern "DEF-EXTERNAL-CALL" (ccl-vm-package)) ,(if (string= name symbol) name (list name symbol)) ,(cffi-type return-type)
+                    ,@(loop for type in arg-types
+                            for i from 1
+                            collect (list (intern (format nil "ARG~d" i) "CCL-FFI") (cffi-type type)))))))
 
 (defun write-file (output platforms separator)
   (with-open-file (out output :direction :output :if-exists :supersede)
     (with-standard-io-syntax
-      (let ((*package* (find-package "COMMON-LISP-USER"))
+      (let ((*package* (ccl-vm-package))
             (*print-pretty* t)
             (*print-case* :downcase)
             (*print-right-margin* 110))
@@ -100,7 +117,7 @@
 
 (defun gen-ffi (output-directory &rest sysroots &key linux-x86-64-sysroot linux-arm64-sysroot)
   (declare (ignore linux-x86-64-sysroot linux-arm64-sysroot))
-  (let ((types nil) (records nil) (constants nil))
+  (let ((types nil) (records nil) (constants nil) (functions nil))
     (loop for (features target sysroot-key) in *platforms*
           do (let* ((sysroot (and sysroot-key
                                   (or (getf sysroots sysroot-key) (error "No ~s given" sysroot-key))))
@@ -108,12 +125,15 @@
                     (info (ffi-info:c-info :headers (append *headers* (and darwin *darwin-headers*))
                                            :target target :sysroot sysroot
                                            :extra-args (and (not darwin) '("-D_GNU_SOURCE"))
-                                           :types *types* :records *records* :constants *constants*))
+                                           :types *types* :records *records* :constants *constants*
+                                           :functions *functions*))
                     (missing (ffi-info:c-info-missing info)))
-               (multiple-value-bind (type-forms record-forms constant-forms) (platform-definitions info)
+               (multiple-value-bind (type-forms record-forms constant-forms function-forms) (platform-definitions info)
+                 (push (list features function-forms (remove-if-not (lambda (name) (member name missing :test #'string=)) *functions*)) functions)
                  (push (list features type-forms (remove-if-not (lambda (name) (member name missing :test #'string=)) *types*)) types)
                  (push (list features record-forms (remove-if-not (lambda (name) (member name missing :test #'string=)) *records*)) records)
                  (push (list features constant-forms (remove-if-not (lambda (name) (member name missing :test #'string=)) *constants*)) constants))))
     (write-file (merge-pathnames "ffi-types.lisp" output-directory) (reverse types) (format nil "~%"))
     (write-file (merge-pathnames "ffi-records.lisp" output-directory) (reverse records) (format nil "~%~%"))
-    (write-file (merge-pathnames "ffi-constants.lisp" output-directory) (reverse constants) (format nil "~%"))))
+    (write-file (merge-pathnames "ffi-constants.lisp" output-directory) (reverse constants) (format nil "~%"))
+    (write-file (merge-pathnames "ffi-functions.lisp" output-directory) (reverse functions) (format nil "~%~%"))))

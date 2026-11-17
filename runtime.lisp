@@ -292,11 +292,11 @@
 ;;;; Very temporary, I hope..  
 (defparameter *known-c-functions-alist* nil)
 
+;; NAME-SPEC is the function's C name, or (C-NAME LINKER-NAME) when the linker's differs (e.g. stat$INODE64).
 (defmacro def-external-call (name-spec return-type &rest argspecs)
-  (when (stringp name-spec)
-    (setq name-spec (list (intern (string-upcase name-spec) :CCL-FFI) name-spec)))
-  (destructuring-bind (lisp-name string) name-spec
-    (let ((body-form `(,lisp-name ,@(mapcar (lambda (argspec)
+  (destructuring-bind (string &optional (linker-name string)) (if (stringp name-spec) (list name-spec) name-spec)
+    (let* ((lisp-name (intern (string-upcase string) :ccl-ffi))
+           (body-form `(,lisp-name ,@(mapcar (lambda (argspec)
                                               (destructuring-bind (var type) argspec
                                                 (if (eq type :pointer)
                                                   `(%macptr-ptr ,var)
@@ -305,7 +305,7 @@
       (when (eq return-type :pointer)
         (setq body-form `(make-ccl-macptr ,body-form)))
       `(progn
-         (cffi:defcfun (,lisp-name ,string)  ,return-type ,@argspecs)
+         (cffi:defcfun (,lisp-name ,linker-name) ,return-type ,@argspecs)
          (push (cons ,string
                      (named-function ,lisp-name ,(mapcar #'car argspecs) ,body-form))
                *known-c-functions-alist*)
