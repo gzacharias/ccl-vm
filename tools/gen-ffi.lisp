@@ -1,25 +1,31 @@
 ;;; Writes ffi-types.lisp, ffi-records.lisp and ffi-constants.lisp: the CFFI definitions of the
 ;;; foreign types and records and the values of the OS constants the VM's runtime needs, for each
-;;; platform, from that platform's ccl interface database.  (Function signatures, which a groveller
-;;; couldn't find either, are maintained by hand, in ffi-functions.lisp.)  Run it in native ccl:
+;;; platform, found by clang (the ffi-info library).  (Function signatures are maintained by hand,
+;;; in ffi-functions.lisp.)  Load it in a lisp with Quicklisp, ffi-info and clang:
 ;;;   (load "gen-ffi.lisp")
-;;;   (gen-ffi "/path/to/headers/" "/path/to/ccl-vm/")
-;;; where /path/to/headers/ has the libc interface directories of the ccl releases
-;;; (darwin-x86-headers64/libc/, darwin-arm64-headers/libc/, x86-headers64/libc/, arm64-headers/libc/).
+;;;   (ccl-vm-gen-ffi:gen-ffi "/path/to/ccl-vm/" :linux-x86-64-sysroot "..." :linux-arm64-sysroot "...")
+;;; Darwin's headers come from the SDK; Linux's from sysroots with the targets' usr/include.
 
-(in-package "CCL")
+(defpackage "CCL-VM-GEN-FFI" (:use "COMMON-LISP") (:export "GEN-FFI"))
 
-(defpackage "CFFI" (:use) (:export "DEFCSTRUCT" "DEFCUNION" "DEFCTYPE"))
+(in-package "CCL-VM-GEN-FFI")
+
 (defpackage "CCL-FFI" (:use))
 
+(defparameter *headers*
+  '("sys/types.h" "sys/stat.h" "sys/time.h" "sys/resource.h" "sys/socket.h" "sys/utsname.h" "dirent.h"
+    "dlfcn.h" "errno.h" "fcntl.h" "unistd.h" "netdb.h" "limits.h" "stdio.h" "stdlib.h"))
+
+(defparameter *darwin-headers* '("mach/mach.h"))
+
 ;; Integer typedefs used in the VM's function signatures.
-(defparameter *vm-ffi-types* '(:size_t :ssize_t :off_t :mode_t :host_t :mach_msg_type_number_t))
+(defparameter *types* '("size_t" "ssize_t" "off_t" "mode_t" "host_t" "mach_msg_type_number_t"))
 
-;; Record names as the bundle refers to them.
-(defparameter *vm-ffi-records* '(:timeval :timespec :rusage :stat :dirent :<D>L_INFO :host_basic_info))
+;; Records the bundle refers to.
+(defparameter *records* '("timeval" "timespec" "rusage" "stat" "dirent" "Dl_info" "host_basic_info"))
 
-;; Constant names as the bundle refers to them.
-(defparameter *vm-ffi-constants*
+;; Constants the bundle refers to.
+(defparameter *constants*
   '("_SYS_NAMELEN" "RTLD_GLOBAL" "RTLD_NOLOAD" "HOST_BASIC_INFO_COUNT" "KERN_SUCCESS" "HOST_BASIC_INFO"
     "_SC_CLK_TCK" "_SC_PAGESIZE" "PATH_MAX" "S_IFMT" "S_IFDIR" "S_IFREG" "S_IFLNK" "S_IFIFO" "S_IFSOCK"
     "SEEK_CUR" "SEEK_SET" "SEEK_END" "O_RDONLY" "O_WRONLY" "O_RDWR" "O_CREAT" "O_EXCL" "RUSAGE_SELF"
@@ -28,133 +34,86 @@
     "ECONNABORTED" "ECONNRESET" "ENOBUFS" "ESHUTDOWN" "ETIMEDOUT" "ECONNREFUSED" "EHOSTDOWN"
     "EHOSTUNREACH" "_PC_MAX_INPUT" "SOL_SOCKET" "SO_SNDLOWAT" "AF_INET" "AF_INET6" "AF_UNIX"))
 
-;; (features interface-directory interface-package attributes), as in the backends' ftds.
-(defparameter *vm-ffi-platforms*
-  '(("(and darwin x86-64)" "ccl:darwin-x86-headers64;" "X86-DARWIN64"
-     (:bits-per-word 64 :signed-char t :struct-by-value t :prepend-underscore t))
-    ("(and darwin arm64)" "ccl:darwin-arm64-headers;" "ARM64-DARWIN"
-     (:bits-per-word 64 :signed-char t :struct-by-value t :natural-alignment t :prepend-underscore nil))
-    ("(and linux x86-64)" "ccl:x86-headers64;" "X86-LINUX64"
-     (:bits-per-word 64 :struct-by-value t))
-    ("(and linux arm64)" "ccl:arm64-headers;" "ARM64-LINUX"
-     (:bits-per-word 64 :signed-char nil :struct-by-value t :natural-alignment t :prepend-underscore nil))))
+;; (features clang-target sysroot-keyword)
+(defparameter *platforms*
+  '(("(and darwin x86-64)" "x86_64-apple-macos11" nil)
+    ("(and darwin arm64)" "arm64-apple-macos11" nil)
+    ("(and linux x86-64)" "x86_64-linux-gnu" :linux-x86-64-sysroot)
+    ("(and linux arm64)" "aarch64-linux-gnu" :linux-arm64-sysroot)))
 
-(defun vm-ffi-symbol (name)
-  (intern (string name) "CCL-FFI"))
+;; The bundle's name for a record, field or type: ccl's, upcased with each run of upper-case
+;; letters in <>, e.g. "Dl_info" -> "<D>L_INFO".
+(defun record-symbol (c-name)
+  (intern (with-output-to-string (out)
+            (let ((upper nil))
+              (loop for ch across c-name
+                    do (cond ((and (upper-case-p ch) (not upper)) (write-char #\< out) (setq upper t))
+                             ((and (not (upper-case-p ch)) upper) (write-char #\> out) (setq upper nil)))
+                       (write-char (char-upcase ch) out))
+              (when upper (write-char #\> out))))
+          "CCL-FFI"))
 
-(defun vm-cffi-type (type)
-  (etypecase type
-    (foreign-integer-type
-     (let ((bits (foreign-integer-type-bits type)))
-       (assert (member bits '(8 16 32 64)) () "Unexpected integer size ~s" type)
-       (intern (format nil "~:[U~;~]INT~d" (foreign-integer-type-signed type) bits) :keyword)))
-    (foreign-single-float-type :float)
-    (foreign-double-float-type :double)
-    ;; Before macptr: records are a kind of macptr type.
-    (foreign-record-type
-     (assert (foreign-record-type-name type) () "Anonymous record ~s" type)
-     (list (foreign-record-type-kind type) (vm-ffi-symbol (foreign-record-type-name type))))
-    (foreign-macptr-type :pointer)))
+;; The bundle's name for a constant is the C name.
+(defun constant-symbol (c-name)
+  (intern c-name "CCL-FFI"))
 
-;; Returns the defcstruct/defcunion forms for RECORD, preceded by those for the records it contains.
-;; NAME is the name to define it as, when that isn't the record's own (a typedef).
-(defun vm-record-forms (record done &optional (name (foreign-record-type-name record)))
-  (let ((forms nil))
-    (labels ((field-form (field)
-               (let ((type (foreign-record-field-type field))
-                     (offset (foreign-record-field-offset field))
-                     (count nil))
-                 (assert (and (zerop (mod offset 8)) (zerop (mod (foreign-record-field-bits field) 8)))
-                         () "Bit field ~s in ~s" field record)
-                 (when (typep type 'foreign-array-type)
-                   (setq count (reduce #'* (foreign-array-type-dimensions type))
-                         type (foreign-array-type-element-type type)))
-                 (when (typep type 'foreign-record-type)
-                   (setq forms (append forms (vm-record-forms type done))))
-                 `(,(vm-ffi-symbol (foreign-record-field-name field))
-                   ,(vm-cffi-type type)
-                   ,@(and count `(:count ,count))
-                   :offset ,(/ offset 8)))))
-      (progn
-        (unless (gethash name done)
-          (setf (gethash name done) t)
-          (ensure-foreign-type-bits record)
-          (let ((fields (mapcar #'field-form (foreign-record-type-fields record))))
-            (append forms
-                    (list `(,(ecase (foreign-record-type-kind record)
-                               (:struct 'cffi:defcstruct)
-                               (:union 'cffi:defcunion))
-                            (,(vm-ffi-symbol name) :size ,(/ (foreign-record-type-bits record) 8))
-                            ,@fields)))))))))
+(defun cffi-type (type)
+  (if (atom type)
+    (ecase type (:pointer :pointer))
+    (ecase (first type)
+      (:int (destructuring-bind (bits signed) (rest type)
+              (intern (format nil "~:[U~;~]INT~d" signed bits) :keyword)))
+      (:float (ecase (second type) (32 :float) (64 :double)))
+      ((:struct :union) (list (first type) (record-symbol (second type)))))))
 
-(defun vm-platform-ftd (dir package attributes)
-  (let ((ftd (make-ftd :interface-db-directory dir
-                       :interface-package-name package
-                       :attributes attributes)))
-    (unless (find-package package) (make-package package :use nil))
-    (install-standard-foreign-types ftd)
-    (use-interface-dir :libc nil ftd)
-    ftd))
+(defun field-form (field)
+  (destructuring-bind (name type offset) field
+    (if (and (consp type) (eq (first type) :array))
+      `(,(record-symbol name) ,(cffi-type (second type)) :count ,(third type) :offset ,offset)
+      `(,(record-symbol name) ,(cffi-type type) :offset ,offset))))
 
-(defun vm-type-definitions (ftd)
-  (let ((*target-ftd* ftd)
-        (forms nil)
-        (missing nil))
-    (dolist (name *vm-ffi-types*)
-      (if (load-foreign-type name)
-        (let ((type (parse-foreign-type name)))
-          (check-type type foreign-integer-type)
-          (push `(cffi:defctype ,(vm-ffi-symbol name) ,(vm-cffi-type type)) forms))
-        (push name missing)))
-    (values (reverse forms) (reverse missing))))
+(defun platform-definitions (info)
+  (values
+   (loop for (name . type) in (ffi-info:c-info-types info)
+         collect `(cffi:defctype ,(record-symbol name) ,(cffi-type type)))
+   (loop for (name kind size fields) in (ffi-info:c-info-records info)
+         collect `(,(ecase kind (:struct 'cffi:defcstruct) (:union 'cffi:defcunion))
+                   (,(record-symbol name) :size ,size)
+                   ,@(mapcar #'field-form fields)))
+   (loop for (name . value) in (ffi-info:c-info-constants info)
+         collect `(defconstant ,(constant-symbol name) ,value))))
 
-;; Returns the definitions for the platform and the names it doesn't have.
-(defun vm-record-definitions (ftd)
-  (let* ((*target-ftd* ftd)
-         (done (make-hash-table))
-         (forms nil)
-         (missing nil))
-    (dolist (name *vm-ffi-records*)
-      (let ((record (or (load-record name)
-                        (and (load-foreign-type name)
-                             (let ((type (parse-foreign-type name)))
-                               (and (typep type 'foreign-record-type)
-                                    (or (load-record (foreign-record-type-name type)) type)))))))
-        (if record
-          (setq forms (append forms (vm-record-forms record done name)))
-          (push name missing))))
-    (values forms (reverse missing))))
-
-(defun vm-constant-definitions (ftd)
-  (let ((*target-ftd* ftd)
-        (forms nil)
-        (missing nil))
-    (dolist (name *vm-ffi-constants*)
-      (let ((value (interface-constant-value ftd (intern name (ftd-interface-package-name ftd)))))
-        (cond ((null value) (push name missing))
-              (t (check-type value integer)
-                 (push `(defconstant ,(vm-ffi-symbol name) ,value) forms)))))
-    (values (reverse forms) (reverse missing))))
-
-(defun write-vm-ffi-file (output definitions-function separator)
+(defun write-file (output platforms separator)
   (with-open-file (out output :direction :output :if-exists :supersede)
     (with-standard-io-syntax
       (let ((*package* (find-package "COMMON-LISP-USER"))
             (*print-pretty* t)
             (*print-case* :downcase)
             (*print-right-margin* 110))
-        (format out ";;; Generated by tools/gen-ffi.lisp from the ccl 1.14 interface databases.  Don't edit.~%")
+        (format out ";;; Generated by tools/gen-ffi.lisp, with clang.  Don't edit.~%")
         (format out "~%(in-package :ccl-vm)~%")
-        (loop for (features dir package attributes) in *vm-ffi-platforms*
-              do (multiple-value-bind (forms missing)
-                     (funcall definitions-function (vm-platform-ftd dir package attributes))
-                   (format out "~%~%#+~a~%(progn~{~a~s~})~%" features
-                           (loop for form in forms collect separator collect form))
-                   (when missing
-                     (format out "~%;; Not in ~a: ~{~a~^ ~}~%" dir missing))))))))
+        (loop for (features forms missing) in platforms
+              do (format out "~%~%#+~a~%(progn~{~a~s~})~%" features
+                         (loop for form in forms collect separator collect form))
+                 (when missing
+                   (format out "~%;; Not on this platform: ~{~a~^ ~}~%" missing)))))))
 
-(defun gen-ffi (headers-root output-directory)
-  (let ((*interfaces-root* (pathname headers-root)))
-    (write-vm-ffi-file (merge-pathnames "ffi-types.lisp" output-directory) 'vm-type-definitions (format nil "~%"))
-    (write-vm-ffi-file (merge-pathnames "ffi-records.lisp" output-directory) 'vm-record-definitions (format nil "~%~%"))
-    (write-vm-ffi-file (merge-pathnames "ffi-constants.lisp" output-directory) 'vm-constant-definitions (format nil "~%"))))
+(defun gen-ffi (output-directory &rest sysroots &key linux-x86-64-sysroot linux-arm64-sysroot)
+  (declare (ignore linux-x86-64-sysroot linux-arm64-sysroot))
+  (let ((types nil) (records nil) (constants nil))
+    (loop for (features target sysroot-key) in *platforms*
+          do (let* ((sysroot (and sysroot-key
+                                  (or (getf sysroots sysroot-key) (error "No ~s given" sysroot-key))))
+                    (darwin (search "apple" target))
+                    (info (ffi-info:c-info :headers (append *headers* (and darwin *darwin-headers*))
+                                           :target target :sysroot sysroot
+                                           :extra-args (and (not darwin) '("-D_GNU_SOURCE"))
+                                           :types *types* :records *records* :constants *constants*))
+                    (missing (ffi-info:c-info-missing info)))
+               (multiple-value-bind (type-forms record-forms constant-forms) (platform-definitions info)
+                 (push (list features type-forms (remove-if-not (lambda (name) (member name missing :test #'string=)) *types*)) types)
+                 (push (list features record-forms (remove-if-not (lambda (name) (member name missing :test #'string=)) *records*)) records)
+                 (push (list features constant-forms (remove-if-not (lambda (name) (member name missing :test #'string=)) *constants*)) constants))))
+    (write-file (merge-pathnames "ffi-types.lisp" output-directory) (reverse types) (format nil "~%"))
+    (write-file (merge-pathnames "ffi-records.lisp" output-directory) (reverse records) (format nil "~%~%"))
+    (write-file (merge-pathnames "ffi-constants.lisp" output-directory) (reverse constants) (format nil "~%"))))
