@@ -19,6 +19,9 @@ on:
 permissions:
   contents: read
 
+env:
+  COPYFILE_DISABLE: 1   # no AppleDouble ._ entries from macOS tar
+
 jobs:
   bundle:
     uses: ./.github/workflows/bundle.yml

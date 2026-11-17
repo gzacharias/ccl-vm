@@ -31,6 +31,9 @@ on:
         type: string
         required: true
 
+env:
+  COPYFILE_DISABLE: 1   # no AppleDouble ._ entries from macOS tar
+
 jobs:
   probe:
     runs-on: ${{ inputs.runner }}

@@ -16,6 +16,9 @@ on:
         type: string
         default: ""
 
+env:
+  COPYFILE_DISABLE: 1   # no AppleDouble ._ entries from macOS tar
+
 jobs:
   bundle:
     runs-on: macos-15-intel

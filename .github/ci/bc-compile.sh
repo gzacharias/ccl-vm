@@ -16,4 +16,4 @@ EOF
 cat "$log"
 grep -qx BC-DONE "$log" || { echo "::error::bc-compile-ccl didn't finish"; exit 1; }
 echo "bc files: $(find "$dir/ccl-bc" -name '*.bc' | wc -l | tr -d ' ')"
-tar -czf ccl-bc.tar.gz -C "$dir" ccl-bc
+COPYFILE_DISABLE=1 tar -czf ccl-bc.tar.gz -C "$dir" ccl-bc

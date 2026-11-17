@@ -24,6 +24,7 @@ permissions:
   contents: read
 
 env:
+  COPYFILE_DISABLE: 1   # no AppleDouble ._ entries from macOS tar
   CCL_REF: ${{ inputs.ccl_ref || 'ci' }}
 
 jobs:
