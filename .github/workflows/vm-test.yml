@@ -2,7 +2,8 @@
 # makes the canonical bundle from it, generations 1 and 2 on sbcl (gen2.yml), then in parallel
 # runs ccl-tests on the native build (failing only on tests that pass on upstream-base,
 # ccl-tests-baseline.yml) and tests generation 2 in ccl-vm on an Intel mac: boots it on
-# sbcl and on ccl 1.14, and on sbcl cross-compiles a native ccl from it.  The longer tests are in
+# sbcl and on ccl 1.14, and on sbcl cross-compiles a native ccl from a clean upstream ccl
+# (upstream-base, the upstream commit bc-compiler was last merged with).  The longer tests are in
 # vm-extended.yml.
 # A push to the ci branch tests gzacharias/ccl's ci branch and runs every step; so does a push
 # to gzacharias/ccl's bc-compiler, whose bc-compiler.yml calls this workflow.  The release-bundle
@@ -153,12 +154,12 @@ jobs:
           ref: ${{ env.CCL_VM_REF }}
           path: ccl-vm
 
-      - name: Check out ccl sources (for the cross-compile)
+      - name: Check out upstream-base (to cross-compile)
         if: ${{ github.event_name == 'push' || inputs.cross_compile }}
         uses: actions/checkout@v7
         with:
           repository: gzacharias/ccl
-          ref: ${{ env.CCL_REF }}
+          ref: upstream-base
           path: ccl
           fetch-depth: 0               # full history and tags, so `git describe` works for the version string
 

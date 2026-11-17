@@ -7,8 +7,8 @@
 # upstream ccl that bc-compiler was last merged with), per ccl-tests-baseline.yml.  Every cell
 # runs to the end even if another fails.  The platforms input picks a subset of the labels (the
 # quick check uses the two macs).  Artifacts: ccl-bc-LABEL, ccl-native-LABEL (the native build),
-# logs-LABEL, ccl-bc, and ccl-tests-baseline-LABEL (also used by cross.yml); output
-# ccl_tests_ref, the ccl-tests commit to run.
+# logs-LABEL, ccl-bc, and ccl-tests-baseline-LABEL (also used by cross.yml); outputs
+# ccl_tests_ref, the ccl-tests commit to run, and upstream_base, the baselines' upstream-base commit.
 # The steps' scripts are in .github/ci/.
 name: Native builds
 
@@ -26,6 +26,9 @@ on:
       ccl_tests_ref:
         description: "The Clozure/ccl-tests commit the baselines are for"
         value: ${{ jobs.baseline.outputs.ccl_tests_ref }}
+      upstream_base:
+        description: "The upstream-base commit the baselines are for"
+        value: ${{ jobs.baseline.outputs.upstream_base }}
   workflow_dispatch:
     inputs:
       ccl_ref:
