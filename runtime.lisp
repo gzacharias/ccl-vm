@@ -289,29 +289,6 @@
     (symbol-value sym)))
 
 
-;;;; Very temporary, I hope..  
-(defparameter *known-c-functions-alist* nil)
-
-;; NAME-SPEC is the function's C name, or (C-NAME LINKER-NAME) when the linker's differs (e.g. stat$INODE64).
-(defmacro def-external-call (name-spec return-type &rest argspecs)
-  (destructuring-bind (string &optional (linker-name string)) (if (stringp name-spec) (list name-spec) name-spec)
-    (let* ((lisp-name (intern (string-upcase string) :ccl-ffi))
-           (body-form `(,lisp-name ,@(mapcar (lambda (argspec)
-                                              (destructuring-bind (var type) argspec
-                                                (if (eq type :pointer)
-                                                  `(%macptr-ptr ,var)
-                                                  var)))
-                                            argspecs))))
-      (when (eq return-type :pointer)
-        (setq body-form `(make-ccl-macptr ,body-form)))
-      `(progn
-         (cffi:defcfun (,lisp-name ,linker-name) ,return-type ,@argspecs)
-         (push (cons ,string
-                     (named-function ,lisp-name ,(mapcar #'car argspecs) ,body-form))
-               *known-c-functions-alist*)
-         ',lisp-name))))
-
-
 ;; TODO: see if can make this an alist (or hash table) based on the CCL sym rather than the native sym!
 ;;  Only thing is, would need to clear it out any time clear out the package system.
 ;; CCL exits the process with _exit or exit.  In the VM that returns from CLOOP instead, with the

@@ -254,6 +254,28 @@
   #+ccl `(ccl:nfunction ,name (lambda ,arglist ,@body))
   #-ccl `(function (lambda ,arglist ,@body)))
 
+;; The C functions the bundle can call (#_), by name.  def-external-call adds one.
+(defparameter *known-c-functions-alist* nil)
+
+;; NAME-SPEC is the function's C name, or (C-NAME LINKER-NAME) when the linker's differs (e.g. stat$INODE64).
+(defmacro def-external-call (name-spec return-type &rest argspecs)
+  (destructuring-bind (string &optional (linker-name string)) (if (stringp name-spec) (list name-spec) name-spec)
+    (let* ((lisp-name (intern (string-upcase string) :ccl-ffi))
+           (body-form `(,lisp-name ,@(mapcar (lambda (argspec)
+                                              (destructuring-bind (var type) argspec
+                                                (if (eq type :pointer)
+                                                  `(%macptr-ptr ,var)
+                                                  var)))
+                                            argspecs))))
+      (when (eq return-type :pointer)
+        (setq body-form `(make-ccl-macptr ,body-form)))
+      `(progn
+         (cffi:defcfun (,lisp-name ,linker-name) ,return-type ,@argspecs)
+         (push (cons ,string
+                     (named-function ,lisp-name ,(mapcar #'car argspecs) ,body-form))
+               *known-c-functions-alist*)
+         ',lisp-name))))
+
 (defmacro without-fpu-overflow (&body body)
   #+ccl `(let ((overflow (ccl:get-fpu-mode :overflow)))
            (unwind-protect
