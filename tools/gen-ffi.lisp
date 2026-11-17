@@ -1,6 +1,7 @@
-;;; Writes ffi-records.lisp and ffi-constants.lisp: the CFFI definitions of the foreign records
-;;; and the values of the OS constants the VM's runtime needs, for each platform, from that
-;;; platform's ccl interface database.  Run it in native ccl:
+;;; Writes ffi-types.lisp, ffi-records.lisp and ffi-constants.lisp: the CFFI definitions of the
+;;; foreign types and records and the values of the OS constants the VM's runtime needs, for each
+;;; platform, from that platform's ccl interface database.  (Function signatures, which a groveller
+;;; couldn't find either, are maintained by hand, in ffi-functions.lisp.)  Run it in native ccl:
 ;;;   (load "gen-ffi.lisp")
 ;;;   (gen-ffi "/path/to/headers/" "/path/to/ccl-vm/")
 ;;; where /path/to/headers/ has the libc interface directories of the ccl releases
@@ -8,8 +9,11 @@
 
 (in-package "CCL")
 
-(defpackage "CFFI" (:use) (:export "DEFCSTRUCT" "DEFCUNION"))
+(defpackage "CFFI" (:use) (:export "DEFCSTRUCT" "DEFCUNION" "DEFCTYPE"))
 (defpackage "CCL-FFI" (:use))
+
+;; Integer typedefs used in the VM's function signatures.
+(defparameter *vm-ffi-types* '(:size_t :ssize_t :off_t :mode_t :host_t :mach_msg_type_number_t))
 
 ;; Record names as the bundle refers to them.
 (defparameter *vm-ffi-records* '(:timeval :timespec :rusage :stat :dirent :<D>L_INFO :host_basic_info))
@@ -92,6 +96,18 @@
     (use-interface-dir :libc nil ftd)
     ftd))
 
+(defun vm-type-definitions (ftd)
+  (let ((*target-ftd* ftd)
+        (forms nil)
+        (missing nil))
+    (dolist (name *vm-ffi-types*)
+      (if (load-foreign-type name)
+        (let ((type (parse-foreign-type name)))
+          (check-type type foreign-integer-type)
+          (push `(cffi:defctype ,(vm-ffi-symbol name) ,(vm-cffi-type type)) forms))
+        (push name missing)))
+    (values (reverse forms) (reverse missing))))
+
 ;; Returns the definitions for the platform and the names it doesn't have.
 (defun vm-record-definitions (ftd)
   (let* ((*target-ftd* ftd)
@@ -139,5 +155,6 @@
 
 (defun gen-ffi (headers-root output-directory)
   (let ((*interfaces-root* (pathname headers-root)))
+    (write-vm-ffi-file (merge-pathnames "ffi-types.lisp" output-directory) 'vm-type-definitions (format nil "~%"))
     (write-vm-ffi-file (merge-pathnames "ffi-records.lisp" output-directory) 'vm-record-definitions (format nil "~%~%"))
     (write-vm-ffi-file (merge-pathnames "ffi-constants.lisp" output-directory) 'vm-constant-definitions (format nil "~%"))))

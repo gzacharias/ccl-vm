@@ -209,9 +209,6 @@
   (ccl-ffi::pad :uint32)
   (ccl-ffi::value (:union ccl-ffi::dbm-constant-value)))
 
-(cffi:defctype ccl-ffi::mach_msg_type_number_t :uint32)
-
-
 ;; This is what we seem to get from ff-readdir
 (cffi:defcstruct ccl-ffi::dirent32
   (ccl-ffi::d_ino :uint32)
@@ -284,13 +281,6 @@
 (defun u32-sign-extend (word)
   (if (logbitp 31 word) (logior word (ash -1 32)) word))
 
-;;; Predefine some foreign fns we call during startup, figure out dynamic stuff later
-(cffi:defctype ccl-ffi::host_t :uint32)
-(cffi:defctype ccl-ffi::size_t :uint64)
-(cffi:defctype ccl-ffi::ssize_t :int64)
-(cffi:defctype ccl-ffi::offset_t :int64)
-
-
 (deflapfunction cvm-os-constant (symvec)
   (check-type symvec ccl-symvector)
   (let* ((sym (cffi-symbol symvec)))
@@ -321,92 +311,6 @@
                *known-c-functions-alist*)
          ',lisp-name))))
 
-
-(def-external-call "memset" :pointer
-  (ptr :pointer)
-  (val :int)
-  (size ccl-ffi::size_t))
-
-(def-external-call "memmove" :pointer
-  (dest :pointer)
-  (src :pointer)
-  (size ccl-ffi::size_t))
-
-(def-external-call "getdtablesize" :int)
-
-(def-external-call "nanosleep" :int
-  (request :pointer)
-  (remaining :pointer))
-
-(def-external-call "mach_host_self" ccl-ffi::host_t)
-
-(def-external-call "host_info" :int
-  (host ccl-ffi::host_t)
-  (flavor :int)
-  (host-info-out :pointer)
-  (host-info-out-cnt :pointer))
-
-(def-external-call "getpagesize" :int)
-
-(def-external-call "sysconf" :long
-  (name :int))
-
-(def-external-call "getuid" :int)
-
-(def-external-call "getenv" :pointer
-  (name :pointer))
-
-(def-external-call "getpwuid_r" :int
-  (uid :int)
-  (pwd :pointer)
-  (buffer :pointer)
-  (size ccl-ffi::size_t)
-  (result :pointer))
-
-(def-external-call "uname" :int
-  (buf :pointer))
-
-(def-external-call "getcwd" :pointer
-  (buf :pointer)
-  (size ccl-ffi::size_t))
-
-(def-external-call "isatty" :int
-  (fd :int))
-
-(def-external-call "chdir" :int
-  (path :pointer))
-
-(def-external-call "fpathconf" :long
-  (fd :int)
-  (size :int))
-
-(def-external-call "getsockopt" :int
-  (fd :int)
-  (level :int)
-  (option :int)
-  (opt_value :pointer)
-  (opt_len :pointer))
-
-(def-external-call "rename" :int
-  (old :pointer)
-  (new :pointer))
-
-(def-external-call "unlink" :int
-  (path :pointer))
-
-(def-external-call "mkdir" :int
-  (path :pointer)
-  (mode :uint16))   ; mode_t
-
-(def-external-call "rmdir" :int
-  (path :pointer))
-
-(def-external-call "strerror" :pointer
-  (errno :int))
-
-(def-external-call "getrusage" :int
-  (who :int)
-  (usage :pointer))
 
 ;; TODO: see if can make this an alist (or hash table) based on the CCL sym rather than the native sym!
 ;;  Only thing is, would need to clear it out any time clear out the package system.
@@ -803,9 +707,9 @@
   (path :pointer)
   (buf :pointer))
 
-(cffi:defcfun (ff-lseek "lseek") ccl-ffi::offset_t
+(cffi:defcfun (ff-lseek "lseek") ccl-ffi::off_t
   (fd :int)
-  (offset ccl-ffi::offset_t)
+  (offset ccl-ffi::off_t)
   (whence :int))
 
 (defun ff-open (path flag mode)
@@ -838,7 +742,7 @@
 
 (cffi:defcfun (ff-ftruncate "ftruncate") :int
   (fd :int)
-  (length ccl-ffi::offset_t))
+  (length ccl-ffi::off_t))
 
 (defun kernel-import-lisp-lseek (fd offset whence) (ff-lseek fd offset whence))
 
