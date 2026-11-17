@@ -1,7 +1,5 @@
 (in-package :ccl-vm)
 
-(defpackage "CCL-FFI" (:use))
-
 (defparameter *lap-functions* nil)
 
 
@@ -194,35 +192,6 @@
 #+hemlock(hemlock::defindent "defcstruct" 1)
 
 
-(cffi:defcstruct ccl-ffi::<d>l_info
-  (ccl-ffi::dli_fname :pointer)
-  (ccl-ffi::dli_fbase :pointer)
-  (ccl-ffi::dli_sname :pointer)
-  (ccl-ffi::dli_saddr :pointer))
-
-(cffi:defcstruct ccl-ffi::timeval
-  (ccl-ffi::tv_sec :int64)
-  (ccl-ffi::tv_usec :int32))
-
-;;; For TIME (lib/time.lisp) and %%RUSAGE
-(cffi:defcstruct ccl-ffi::rusage
-  (ccl-ffi::ru_utime (:struct ccl-ffi::timeval))
-  (ccl-ffi::ru_stime (:struct ccl-ffi::timeval))
-  (ccl-ffi::ru_maxrss :long)
-  (ccl-ffi::ru_ixrss :long)
-  (ccl-ffi::ru_idrss :long)
-  (ccl-ffi::ru_isrss :long)
-  (ccl-ffi::ru_minflt :long)
-  (ccl-ffi::ru_majflt :long)
-  (ccl-ffi::ru_nswap :long)
-  (ccl-ffi::ru_inblock :long)
-  (ccl-ffi::ru_oublock :long)
-  (ccl-ffi::ru_msgsnd :long)
-  (ccl-ffi::ru_msgrcv :long)
-  (ccl-ffi::ru_nsignals :long)
-  (ccl-ffi::ru_nvcsw :long)
-  (ccl-ffi::ru_nivcsw :long))
-
 ;;; Interface database records (lib/foreign-types.lisp), for db-io lookups when
 ;;; cross-compiling for a target that has an interface database.
 (cffi:defcstruct ccl-ffi::cdb-datum
@@ -240,54 +209,8 @@
   (ccl-ffi::pad :uint32)
   (ccl-ffi::value (:union ccl-ffi::dbm-constant-value)))
 
-(cffi:defcstruct ccl-ffi::host_basic_info
-  (ccl-ffi::max_cpus :int32)
-  (ccl-ffi::avail_cpus :int32)
-  (ccl-ffi::memory_size :uint32)
-  (ccl-ffi::cpu_type :int32)
-  (ccl-ffi::cpu_subtype :int32)
-  (ccl-ffi::cpu_threadtype :int32)
-  (ccl-ffi::physical_cpu :int32)
-  (ccl-ffi::physical_cpu_max :int32)
-  (ccl-ffi::logical_cpu :int32)
-  (ccl-ffi::logical_cpu_max :int32)
-  (ccl-ffi::max_mem :uint64))
-
-(cffi:defcstruct ccl-ffi::timespec
-  (ccl-ffi::tv_sec :int64)
-  (ccl-ffi::tv_nsec :int64))
-
-(cffi:defcstruct ccl-ffi::stat
-  (ccl-ffi::st_dev :int32)
-  (ccl-ffi::st_mode :uint16)
-  (ccl-ffi::st_nlink :uint16)
-  (ccl-ffi::st_ino :uint64)
-  (ccl-ffi::st_uid :uint32)
-  (ccl-ffi::st_gid :uint32)
-  (ccl-ffi::st_rdev :int32)
-  (ccl-ffi::st_atimespec (:struct ccl-ffi::timespec))
-  (ccl-ffi::st_mtimespec (:struct ccl-ffi::timespec))
-  (ccl-ffi::st_ctimespec (:struct ccl-ffi::timespec))
-  (ccl-ffi::st_birthtimespec (:struct ccl-ffi::timespec))
-  (ccl-ffi::st_size :int64)
-  (ccl-ffi::st_blocks :int64)
-  (ccl-ffi::st_blksize :int32)
-  (ccl-ffi::st_flags :uint32)
-  (ccl-ffi::st_gen :uint32)
-  (ccl-ffi::st_lspare :int32)
-  (ccl-ffi::st_qspare1 :int64)
-  (ccl-ffi::st_qspare2 :int64))
-
 (cffi:defctype ccl-ffi::mach_msg_type_number_t :uint32)
 
-
-(cffi:defcstruct ccl-ffi::dirent
-  (ccl-ffi::d_ino :uint64)
-  (ccl-ffi::d_seekoff :uint64)
-  (ccl-ffi::d_reclen :uint16)
-  (ccl-ffi::d_namlen :uint16)
-  (ccl-ffi::d_type :uint8)
-  (ccl-ffi::d_name :uint8 :count 1024))
 
 ;; This is what we seem to get from ff-readdir
 (cffi:defcstruct ccl-ffi::dirent32

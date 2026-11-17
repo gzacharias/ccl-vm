@@ -20,3 +20,5 @@
 ;; deflapfunction (runtime.lisp) are only queued, to be installed once the ccl packages exist.  loader.lisp sets it back to
 ;; nil at the end of the vm's load; after that a deflapfunction evaluated by itself installs right away.
 (defvar *loading-ccl* t)
+
+(defpackage "CCL-FFI" (:use))

@@ -13,5 +13,6 @@
                (:file "syms")
                (:file "funcs")
                (:file "bceval")
+               (:file "ffi-records")
                (:file "runtime")
                (:file "loader")))
