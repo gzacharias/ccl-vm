@@ -14,5 +14,6 @@
                (:file "funcs")
                (:file "bceval")
                (:file "ffi-records")
+               (:file "ffi-constants")
                (:file "runtime")
                (:file "loader")))
