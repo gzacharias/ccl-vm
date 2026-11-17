@@ -1,7 +1,7 @@
 #!/bin/bash
 # usage: vm-rebuild.sh HOST BUNDLE-DIR NAME
 # Boots BUNDLE-DIR in ccl-vm on HOST, runs (rebuild-ccl :clean t) on a fresh copy of the ccl
-# sources in ./ccl/, and collects the resulting .bc files into a new bundle, ./NAME/.
+# sources in ./ccl/, writing the new bundle to ./NAME/.
 # Log: NAME.log.
 # *gensym-counter* is bound around rebuild-ccl so the gensyms dumped in the .bc files get the same
 # names in every run, and bundles rebuilt on different hosts can be compared byte for byte.  Only
@@ -13,8 +13,7 @@ rm -rf "$tree" "$name"
 rsync -a ccl/ "$tree/"
 "$(dirname "$0")/vm" "$host" "$bundle" "$tree" > "$name.log" 2>&1 <<EOF
 (progn
-  (let ((*gensym-counter* 0)) (rebuild-ccl :clean t))
-  (ccl::collect-all-fasls "$PWD/$name/")
+  (let ((*gensym-counter* 0)) (rebuild-ccl :clean t :reload "$PWD/$name/"))
   (format t "~&VM-REBUILD-DONE~%"))
 EOF
 tail -40 "$name.log"

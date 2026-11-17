@@ -66,11 +66,7 @@ CCL running in ccl-vm can recompile itself in the usual way:
 ```
 ccl? (rebuild-ccl :clean t)
 ```
-This will leave `.bc` files in the VM's "ccl:" directory, in all the places that fasl files get normally placed by `rebuild-ccl`.  To gather them into a new ccl-bc bundle, use this:
-
-```
-ccl? (ccl::collect-all-fasls "/path/to/new-ccl-bc/")
-```
+This writes a new bundle to "ccl:ccl-bc.tar.gz", the CVM's counterpart of the heap image other targets write.  To put it somewhere else, use e.g. `:reload "/path/to/new-ccl-bc.tar.gz"`, or a directory, e.g. `:reload "/path/to/new-ccl-bc/"`.  `load-ccl` accepts either.
 
 ## Cross-compiling from the VM
 

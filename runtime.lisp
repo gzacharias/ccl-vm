@@ -534,6 +534,9 @@
   (path :pointer)
   (mode :uint16))   ; mode_t
 
+(def-external-call "rmdir" :int
+  (path :pointer))
+
 (def-external-call "strerror" :pointer
   (errno :int))
 

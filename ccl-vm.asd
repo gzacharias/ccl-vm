@@ -5,7 +5,7 @@
 (asdf:defsystem "ccl-vm"
   :description "A virtual machine that runs Clozure CL from .bc files inside another Common Lisp"
   :license "Apache-2.0"
-  :depends-on ("cffi" "alexandria")
+  :depends-on ("cffi" "alexandria" "uiop")
   :serial t
   :components ((:file "package")
                (:file "defs")

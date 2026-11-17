@@ -1,12 +1,15 @@
 #!/bin/bash
-# usage: vm HOST BUNDLE-DIR [CCL-SOURCE-DIR] < forms
-# Boots the bc bundle in BUNDLE-DIR in ccl-vm, on HOST (sbcl, ccl; experimental: abcl, ecl), and runs the CCL listener
+# usage: vm HOST BUNDLE [CCL-SOURCE-DIR] < forms
+# Boots the bc bundle BUNDLE (a directory or .tar.gz) in ccl-vm, on HOST (sbcl, ccl; experimental: abcl, ecl), and runs the CCL listener
 # on stdin.  CCL-SOURCE-DIR, if given, becomes the VM's "ccl:" directory.
 # Uses $SBCL (default sbcl), $CCL_HOST, $ABCL_DIR or $ECL (default ecl) as the host lisp.  Exits with CCL's exit status.
 set -eu
 host=$1
-bundle=$(cd "$2" && pwd)
-args="#p\"$bundle/\""
+if [ -d "$2" ]; then
+  args="#p\"$(cd "$2" && pwd)/\""
+else
+  args="#p\"$(cd "$(dirname "$2")" && pwd)/$(basename "$2")\""
+fi
 if [ $# -ge 3 ]; then
   args="$args :ccl-directory #p\"$(cd "$3" && pwd)/\""
 fi

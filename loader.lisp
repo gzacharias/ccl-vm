@@ -58,8 +58,28 @@
                    (restart-cloop () :report (lambda (s) (format s "Restart CVM toplevel"))))))))))
 
 
+(defun bundle-directory (bc-bundle)
+  "The directory holding the .bc files of BC-BUNDLE, a directory or a .tar.gz of one, which
+gets extracted into a temporary directory."
+  (if (null (pathname-name bc-bundle))
+    bc-bundle
+    (let ((dir (merge-pathnames (format nil "ccl-vm-~36r/" (random (expt 36 8) (make-random-state t)))
+                                (uiop:temporary-directory))))
+      (ensure-directories-exist dir)
+      (uiop:run-program (list "tar" "-xzf" (uiop:native-namestring bc-bundle)
+                              "-C" (uiop:native-namestring dir))
+                        :output t :error-output t)
+      ;; The .bc files are in the archive's top directory (ccl-bc/ normally).
+      (let ((subdirs (remove-if (lambda (d) (char= #\. (char (car (last (pathname-directory d))) 0)))
+                                (uiop:subdirectories dir))))
+        (unless (and (= (length subdirs) 1) (probe-file (merge-pathnames "level-1.bc" (first subdirs))))
+          (error "~a doesn't look like a ccl bc bundle: it should have a single top directory with level-1.bc"
+                 bc-bundle))
+        (first subdirs)))))
+
 ;;; ~5 mins
 (defun load-ccl (bc-bundle &key ccl-directory)
+  (setq bc-bundle (bundle-directory bc-bundle))
   (unless (probe-file (merge-pathnames "level-1.bc" bc-bundle))
     (error "~a doesn't look like a ccl bc directory, it has no level-1.bc" bc-bundle))
   (when (and ccl-directory (not (probe-file (merge-pathnames "level-1" ccl-directory))))
