@@ -6,7 +6,7 @@
 ;;;   (load "tools/gen-ffi.lisp")
 ;;;   (ccl-vm-gen-ffi:gen-ffi "ffi.lisp")
 ;;; That replaces (or adds) the section for the machine it runs on, and leaves the others alone.
-;;; A name added to tools/gen-ffi.lisp's lists needs every section regenerated.
+;;; A name added to *ffi-names* (runtime.lisp) needs every section regenerated.
 
 (in-package :ccl-vm)
 

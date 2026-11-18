@@ -347,34 +347,16 @@ triple (default: the host), with SYSROOT as the root for the target's headers."
 (defun ccl-vm-package ()
   (or (find-package "CCL-VM") (make-package "CCL-VM" :use '("COMMON-LISP"))))
 
-(defparameter *headers*
-  '("sys/types.h" "sys/stat.h" "sys/time.h" "sys/resource.h" "sys/socket.h" "sys/utsname.h" "dirent.h"
-    "dlfcn.h" "errno.h" "fcntl.h" "unistd.h" "netdb.h" "limits.h" "stdio.h" "stdlib.h" "string.h" "time.h"
-    "pwd.h"))
+;; The names to describe (ccl-vm's *ffi-names*), read from runtime.lisp rather than loaded, since
+;; ccl-vm can't load on a platform until ffi.lisp has its section.
+(defun ffi-names ()
+  (let* ((source (uiop:read-file-string (merge-pathnames "../runtime.lisp" *gen-ffi-file*)))
+         (start (or (search "(defparameter *ffi-names*" source) (error "No *ffi-names* in runtime.lisp"))))
+    (with-standard-io-syntax
+      (let ((*package* (find-package "CCL-VM-GEN-FFI")))
+        (eval (third (read-from-string source t nil :start start)))))))
 
-(defparameter *darwin-headers* '("mach/mach.h"))
-
-;; Integer typedefs used in the VM's function signatures.
-(defparameter *types* '("size_t" "ssize_t" "off_t" "mode_t" "host_t" "mach_msg_type_number_t"))
-
-;; Records the bundle refers to.
-(defparameter *records* '("timeval" "timespec" "rusage" "stat" "dirent" "Dl_info" "host_basic_info"))
-
-;; Constants the bundle refers to.
-(defparameter *constants*
-  '("_SYS_NAMELEN" "RTLD_GLOBAL" "RTLD_NOLOAD" "HOST_BASIC_INFO_COUNT" "KERN_SUCCESS" "HOST_BASIC_INFO"
-    "_SC_CLK_TCK" "_SC_PAGESIZE" "PATH_MAX" "S_IFMT" "S_IFDIR" "S_IFREG" "S_IFLNK" "S_IFIFO" "S_IFSOCK"
-    "SEEK_CUR" "SEEK_SET" "SEEK_END" "O_RDONLY" "O_WRONLY" "O_RDWR" "O_CREAT" "O_EXCL" "RUSAGE_SELF"
-    "EAI_AGAIN" "EAI_FAIL" "EAI_NONAME" "EPERM" "ENOENT" "EINTR" "ENOMEM" "EACCES" "EEXIST" "ENFILE"
-    "EMFILE" "ERANGE" "EAGAIN" "EADDRINUSE" "EADDRNOTAVAIL" "ENETDOWN" "ENETUNREACH" "ENETRESET"
-    "ECONNABORTED" "ECONNRESET" "ENOBUFS" "ESHUTDOWN" "ETIMEDOUT" "ECONNREFUSED" "EHOSTDOWN"
-    "EHOSTUNREACH" "_PC_MAX_INPUT" "SOL_SOCKET" "SO_SNDLOWAT" "AF_INET" "AF_INET6" "AF_UNIX"))
-
-;; C functions the bundle calls with #_.
-(defparameter *functions*
-  '("memset" "memmove" "getdtablesize" "nanosleep" "mach_host_self" "host_info" "getpagesize" "sysconf"
-    "getuid" "getenv" "getpwuid_r" "uname" "getcwd" "isatty" "chdir" "fpathconf" "getsockopt" "rename"
-    "unlink" "mkdir" "rmdir" "strerror" "getrusage"))
+(defvar *gen-ffi-file* *load-truename*)
 
 ;; This lisp's platform, as features for ffi.lisp's #+.
 (defun host-features ()
@@ -457,7 +439,7 @@ triple (default: the host), with SYSROOT as the root for the target's headers."
 ;;;   (load \"tools/gen-ffi.lisp\")
 ;;;   (ccl-vm-gen-ffi:gen-ffi \"ffi.lisp\")
 ;;; That replaces (or adds) the section for the machine it runs on, and leaves the others alone.
-;;; A name added to tools/gen-ffi.lisp's lists needs every section regenerated.
+;;; A name added to *ffi-names* (runtime.lisp) needs every section regenerated.
 
 (in-package :ccl-vm)
 ")
@@ -479,10 +461,15 @@ triple (default: the host), with SYSROOT as the root for the target's headers."
 
 (defun gen-ffi (file &key target sysroot (features (if target (error "Give :features with :target") (host-features))))
   (let* ((darwin (search "darwin" features))
-         (info (c-info :headers (append *headers* (and darwin *darwin-headers*))
+         (names (ffi-names))
+         (types (getf names :types))
+         (records (getf names :records))
+         (constants (getf names :constants))
+         (functions (getf names :functions))
+         (info (c-info :headers (append (getf names :headers) (and darwin (getf names :darwin-headers)))
                        :target target :sysroot sysroot
                        :extra-args (and (not darwin) '("-D_GNU_SOURCE"))
-                       :types *types* :records *records* :constants *constants* :functions *functions*))
+                       :types types :records records :constants constants :functions functions))
          (missing (c-info-missing info)))
     (multiple-value-bind (type-forms record-forms constant-forms function-forms) (platform-definitions info)
       (let ((section (section-text features
@@ -491,7 +478,7 @@ triple (default: the host), with SYSROOT as the root for the target's headers."
                                      (,constant-forms ,(format nil "~%"))
                                      (,function-forms ,(format nil "~%~%")))
                                    (remove-if-not (lambda (name) (member name missing :test #'string=))
-                                                  (append *types* *records* *constants* *functions*))))
+                                                  (append types records constants functions))))
             (first-line (format nil "#+~a" features)))
         (multiple-value-bind (header sections) (read-sections file)
           (let ((old (position-if (lambda (text) (uiop:string-prefix-p (format nil "~a~%" first-line) text)) sections)))

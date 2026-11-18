@@ -281,6 +281,28 @@
 (defun u32-sign-extend (word)
   (if (logbitp 31 word) (logior word (ash -1 32)) word))
 
+;; The C names the bundle uses (#$, records, #_), and the integer types the function signatures use:
+;; ffi.lisp has their definitions for each platform.  After changing this, regenerate every
+;; section of ffi.lisp, as described there.
+(defparameter *ffi-names*
+  '(:headers ("sys/types.h" "sys/stat.h" "sys/time.h" "sys/resource.h" "sys/socket.h" "sys/utsname.h"
+              "dirent.h" "dlfcn.h" "errno.h" "fcntl.h" "unistd.h" "netdb.h" "limits.h" "stdio.h" "stdlib.h"
+              "string.h" "time.h" "pwd.h")
+    :darwin-headers ("mach/mach.h")
+    :types ("size_t" "ssize_t" "off_t" "mode_t" "host_t" "mach_msg_type_number_t")
+    :records ("timeval" "timespec" "rusage" "stat" "dirent" "Dl_info" "host_basic_info")
+    :constants ("_SYS_NAMELEN" "RTLD_GLOBAL" "RTLD_NOLOAD" "HOST_BASIC_INFO_COUNT" "KERN_SUCCESS"
+                "HOST_BASIC_INFO" "_SC_CLK_TCK" "_SC_PAGESIZE" "PATH_MAX" "S_IFMT" "S_IFDIR" "S_IFREG"
+                "S_IFLNK" "S_IFIFO" "S_IFSOCK" "SEEK_CUR" "SEEK_SET" "SEEK_END" "O_RDONLY" "O_WRONLY" "O_RDWR"
+                "O_CREAT" "O_EXCL" "RUSAGE_SELF" "EAI_AGAIN" "EAI_FAIL" "EAI_NONAME" "EPERM" "ENOENT" "EINTR"
+                "ENOMEM" "EACCES" "EEXIST" "ENFILE" "EMFILE" "ERANGE" "EAGAIN" "EADDRINUSE" "EADDRNOTAVAIL"
+                "ENETDOWN" "ENETUNREACH" "ENETRESET" "ECONNABORTED" "ECONNRESET" "ENOBUFS" "ESHUTDOWN"
+                "ETIMEDOUT" "ECONNREFUSED" "EHOSTDOWN" "EHOSTUNREACH" "_PC_MAX_INPUT" "SOL_SOCKET" "SO_SNDLOWAT"
+                "AF_INET" "AF_INET6" "AF_UNIX")
+    :functions ("memset" "memmove" "getdtablesize" "nanosleep" "mach_host_self" "host_info" "getpagesize"
+                "sysconf" "getuid" "getenv" "getpwuid_r" "uname" "getcwd" "isatty" "chdir" "fpathconf"
+                "getsockopt" "rename" "unlink" "mkdir" "rmdir" "strerror" "getrusage")))
+
 (deflapfunction cvm-os-constant (symvec)
   (check-type symvec ccl-symvector)
   (let* ((sym (cffi-symbol symvec)))
