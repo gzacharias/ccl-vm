@@ -290,8 +290,10 @@
               "dirent.h" "dlfcn.h" "errno.h" "fcntl.h" "unistd.h" "netdb.h" "limits.h" "stdio.h" "stdlib.h"
               "string.h" "time.h" "pwd.h")
     :darwin-headers ("mach/mach.h")
+    :linux-headers ("link.h" "elf.h")
     :types ("size_t" "ssize_t" "off_t" "mode_t" "host_t" "mach_msg_type_number_t")
-    :records ("timeval" "timespec" "rusage" "stat" "dirent" "Dl_info" "host_basic_info")
+    :records ("timeval" "timespec" "rusage" "stat" "dirent" "Dl_info" "host_basic_info" "link_map" "r_debug"
+              "Elf64_Dyn")
     :constants ("_SYS_NAMELEN" "RTLD_GLOBAL" "RTLD_NOLOAD" "HOST_BASIC_INFO_COUNT" "KERN_SUCCESS"
                 "HOST_BASIC_INFO" "_SC_CLK_TCK" "_SC_PAGESIZE" "PATH_MAX" "S_IFMT" "S_IFDIR" "S_IFREG"
                 "S_IFLNK" "S_IFIFO" "S_IFSOCK" "SEEK_CUR" "SEEK_SET" "SEEK_END" "O_RDONLY" "O_WRONLY" "O_RDWR"
@@ -299,7 +301,8 @@
                 "ENOMEM" "EACCES" "EEXIST" "ENFILE" "EMFILE" "ERANGE" "EAGAIN" "EADDRINUSE" "EADDRNOTAVAIL"
                 "ENETDOWN" "ENETUNREACH" "ENETRESET" "ECONNABORTED" "ECONNRESET" "ENOBUFS" "ESHUTDOWN"
                 "ETIMEDOUT" "ECONNREFUSED" "EHOSTDOWN" "EHOSTUNREACH" "_PC_MAX_INPUT" "SOL_SOCKET" "SO_SNDLOWAT"
-                "AF_INET" "AF_INET6" "AF_UNIX")
+                "AF_INET" "AF_INET6" "AF_UNIX" "ENONET" "EPROTO" "_SC_NPROCESSORS_CONF" "DT_NULL" "DT_SONAME"
+                "DT_STRTAB" "RTLD_NOW" "_UTSNAME_LENGTH")
     :functions ("memset" "memmove" "getdtablesize" "nanosleep" "mach_host_self" "host_info" "getpagesize"
                 "sysconf" "getuid" "getenv" "getpwuid_r" "uname" "getcwd" "isatty" "chdir" "fpathconf"
                 "getsockopt" "rename" "unlink" "mkdir" "rmdir" "strerror" "getrusage")))
@@ -836,6 +839,16 @@
       (when (eql val 0)
         (error "Can't find symbol ~s" (cffi:foreign-string-to-lisp name-ptr)))
       val)))
+
+(cffi:defcfun (ff-dlopen "dlopen") :pointer
+  (name :pointer)
+  (flags :int))
+
+(defun kernel-import-getsharedlibrary (name flags)
+  (make-ccl-macptr (ff-dlopen (%macptr-ptr name) flags)))
+
+(defun kernel-import-get-r-debug ()
+  (make-ccl-macptr (or (cffi:foreign-symbol-pointer "_r_debug") (cffi:null-pointer))))
 
 (defconstant node-size 8)
 

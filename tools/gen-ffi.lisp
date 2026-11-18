@@ -133,6 +133,7 @@
   (let ((s (strip-qualifiers string)))
     (cond ((and (plusp (length s)) (char= (char s (1- (length s))) #\])) :array)
           ((or (find #\* s) (find #\^ s)) :pointer)
+          ((uiop:string-prefix-p "enum " s) :int)
           ((find #\( s) :function)
           ((or (uiop:string-prefix-p "struct " s) (uiop:string-prefix-p "union " s)) :record)
           ((member s '("float" "double" "long double" "_Float16") :test #'string=) :float)
@@ -151,6 +152,10 @@ triple (default: the host), with SYSROOT as the root for the target's headers."
          ;; an anonymous one.
          (record-decls (make-hash-table :test 'equal))
          (anonymous-records (make-hash-table :test 'equal))
+         ;; Names, and how to spell them in expressions, for the unnamed record types of named
+         ;; fields, by type string.
+         (record-names (make-hash-table :test 'equal))
+         (record-spellings (make-hash-table :test 'equal))
          (function-decls (make-hash-table :test 'equal))
          (missing nil)
          ;; Expressions to evaluate, each with a function to call with its value.
@@ -197,7 +202,8 @@ triple (default: the host), with SYSROOT as the root for the target's headers."
                       (let ((target (strip-qualifiers (gethash "qualType" (gethash "type" (gethash name typedefs))))))
                         (and (gethash target record-decls) target)))))
              ;; Adds the record spelled KEY to the result, as NAME, and returns its type.
-             (ensure-record (key &optional (name (subseq key (1+ (or (position #\Space key) -1)))))
+             (ensure-record (key &optional (name (or (gethash key record-names)
+                                                     (subseq key (1+ (or (position #\Space key) -1))))))
                (let* ((decl (or (gethash key record-decls) (error "No definition of ~a" key)))
                       (kind (if (equal (gethash "tagUsed" decl) "union") :union :struct)))
                  (unless (assoc name (c-info-records result) :test #'string=)
@@ -205,15 +211,15 @@ triple (default: the host), with SYSROOT as the root for the target's headers."
                  (list kind name)))
              (ensure-record-entry (key name kind decl)
                (progn
-                 (let* ((entry (list name kind nil nil)))
-                   (push entry (c-info-records result))
-                   (evaluate (format nil "sizeof(~a)" key) (lambda (size) (setf (third entry) size)))
-                   (dolist (field (record-fields decl))
+                 (let* ((entry (list name kind nil nil))
+                        (spelling (gethash key record-spellings key)))
+                   (evaluate (format nil "sizeof(~a)" spelling) (lambda (size) (setf (third entry) size)))
+                   (dolist (field (record-fields decl name spelling))
                      (destructuring-bind (field-name . field-type) field
                        (let ((field-entry (list field-name nil nil))
-                             (member (format nil "((~a *)0)->~a" key field-name)))
+                             (member (format nil "((~a *)0)->~a" spelling field-name)))
                          (setf (fourth entry) (append (fourth entry) (list field-entry)))
-                         (evaluate (format nil "offsetof(~a, ~a)" key field-name)
+                         (evaluate (format nil "offsetof(~a, ~a)" spelling field-name)
                                    (lambda (offset) (setf (third field-entry) offset)))
                          (if (eq (category field-type) :array)
                            ;; Count the innermost elements, and describe their type.
@@ -230,17 +236,29 @@ triple (default: the host), with SYSROOT as the root for the target's headers."
                                             (format nil "__typeof__(~a)" element)))
                            (describe-type field-type
                                           (lambda (type) (setf (second field-entry) type))
-                                          (format nil "__typeof__(~a)" member)))))))))
+                                          (format nil "__typeof__(~a)" member))))))
+                   ;; After the records it contains, which CFFI needs defined first.
+                   (push entry (c-info-records result)))))
              ;; ((name . type-string) ...), with the members of anonymous structs and unions in place.
-             (record-fields (decl)
+             ;; A named field of an unnamed record type gets that type as a record named
+             ;; RECORD-NAME_FIELD-NAME.  SPELLING is how to write DECL's type.
+             (record-fields (decl record-name spelling)
                (loop for field across (or (node-inner decl) #())
                      when (equal (node-kind field) "FieldDecl")
                        append (progn
                                 (when (gethash "isBitfield" field)
                                   (error "Bit field ~s in ~s" (node-name field) (node-name decl)))
                                 (if (or (null (node-name field)) (gethash "isImplicit" field))
-                                  (record-fields (anonymous-record-decl decl field))
-                                  (list (cons (node-name field) (node-type-string field)))))))
+                                  (record-fields (anonymous-record-decl decl field) record-name spelling)
+                                  (let* ((type (node-type-string field))
+                                         (key (strip-qualifiers type)))
+                                    (when (and (search "(unnamed " key) (eq (type-category key) :function))
+                                      (unless (gethash key record-decls)
+                                        (setf (gethash key record-decls) (anonymous-record-decl decl field)
+                                              (gethash key record-names) (format nil "~a_~a" record-name (node-name field))
+                                              (gethash key record-spellings) (format nil "__typeof__(((~a *)0)->~a)"
+                                                                                     spelling (node-name field)))))
+                                    (list (cons (node-name field) type)))))))
              (anonymous-record-decl (decl field)
                (let ((type (node-type-string field)))
                  (or (loop for inner across (node-inner decl)
@@ -466,7 +484,8 @@ triple (default: the host), with SYSROOT as the root for the target's headers."
          (records (getf names :records))
          (constants (getf names :constants))
          (functions (getf names :functions))
-         (info (c-info :headers (append (getf names :headers) (and darwin (getf names :darwin-headers)))
+         (info (c-info :headers (append (getf names :headers)
+                                       (getf names (if darwin :darwin-headers :linux-headers)))
                        :target target :sysroot sysroot
                        :extra-args (and (not darwin) '("-D_GNU_SOURCE"))
                        :types types :records records :constants constants :functions functions))

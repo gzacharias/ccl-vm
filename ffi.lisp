@@ -150,6 +150,9 @@
 (defconstant ccl-ffi::af_inet 2)
 (defconstant ccl-ffi::af_inet6 30)
 (defconstant ccl-ffi::af_unix 1)
+(defconstant ccl-ffi::eproto 100)
+(defconstant ccl-ffi::_sc_nprocessors_conf 57)
+(defconstant ccl-ffi::rtld_now 2)
 
 
 (def-external-call "memset" :pointer (ccl-ffi::arg1 :pointer) (ccl-ffi::arg2 :int32) (ccl-ffi::arg3 :uint64))
@@ -201,6 +204,8 @@
 (def-external-call "strerror" :pointer (ccl-ffi::arg1 :int32))
 
 (def-external-call "getrusage" :int32 (ccl-ffi::arg1 :int32) (ccl-ffi::arg2 :pointer)))
+
+;; Not on this platform: link_map r_debug Elf64_Dyn ENONET DT_NULL DT_SONAME DT_STRTAB _UTSNAME_LENGTH
 
 #+(and darwin arm64)
 (progn
@@ -341,6 +346,9 @@
 (defconstant ccl-ffi::af_inet 2)
 (defconstant ccl-ffi::af_inet6 30)
 (defconstant ccl-ffi::af_unix 1)
+(defconstant ccl-ffi::eproto 100)
+(defconstant ccl-ffi::_sc_nprocessors_conf 57)
+(defconstant ccl-ffi::rtld_now 2)
 
 
 (def-external-call "memset" :pointer (ccl-ffi::arg1 :pointer) (ccl-ffi::arg2 :int32) (ccl-ffi::arg3 :uint64))
@@ -392,6 +400,8 @@
 (def-external-call "strerror" :pointer (ccl-ffi::arg1 :int32))
 
 (def-external-call "getrusage" :int32 (ccl-ffi::arg1 :int32) (ccl-ffi::arg2 :pointer)))
+
+;; Not on this platform: link_map r_debug Elf64_Dyn ENONET DT_NULL DT_SONAME DT_STRTAB _UTSNAME_LENGTH
 
 #+(and linux x86-64)
 (progn
@@ -471,6 +481,28 @@
   (ccl-ffi::dli_sname :pointer :offset 16)
   (ccl-ffi::dli_saddr :pointer :offset 24))
 
+(cffi:defcstruct (ccl-ffi::link_map :size 40)
+  (ccl-ffi::l_addr :uint64 :offset 0)
+  (ccl-ffi::l_name :pointer :offset 8)
+  (ccl-ffi::l_ld :pointer :offset 16)
+  (ccl-ffi::l_next :pointer :offset 24)
+  (ccl-ffi::l_prev :pointer :offset 32))
+
+(cffi:defcstruct (ccl-ffi::r_debug :size 40)
+  (ccl-ffi::r_version :int32 :offset 0)
+  (ccl-ffi::r_map :pointer :offset 8)
+  (ccl-ffi::r_brk :uint64 :offset 16)
+  (ccl-ffi::r_state :uint32 :offset 24)
+  (ccl-ffi::r_ldbase :uint64 :offset 32))
+
+(cffi:defcunion (ccl-ffi::<e>lf64_<d>yn_d_un :size 8)
+  (ccl-ffi::d_val :uint64 :offset 0)
+  (ccl-ffi::d_ptr :uint64 :offset 0))
+
+(cffi:defcstruct (ccl-ffi::<e>lf64_<d>yn :size 16)
+  (ccl-ffi::d_tag :int64 :offset 0)
+  (ccl-ffi::d_un (:union ccl-ffi::<e>lf64_<d>yn_d_un) :offset 8))
+
 (defconstant ccl-ffi::rtld_global 256)
 (defconstant ccl-ffi::rtld_noload 4)
 (defconstant ccl-ffi::_sc_clk_tck 2)
@@ -523,6 +555,14 @@
 (defconstant ccl-ffi::af_inet 2)
 (defconstant ccl-ffi::af_inet6 10)
 (defconstant ccl-ffi::af_unix 1)
+(defconstant ccl-ffi::enonet 64)
+(defconstant ccl-ffi::eproto 71)
+(defconstant ccl-ffi::_sc_nprocessors_conf 83)
+(defconstant ccl-ffi::dt_null 0)
+(defconstant ccl-ffi::dt_soname 14)
+(defconstant ccl-ffi::dt_strtab 5)
+(defconstant ccl-ffi::rtld_now 2)
+(defconstant ccl-ffi::_utsname_length 65)
 
 
 (def-external-call "memset" :pointer (ccl-ffi::arg1 :pointer) (ccl-ffi::arg2 :int32) (ccl-ffi::arg3 :uint64))
@@ -651,6 +691,28 @@
   (ccl-ffi::dli_sname :pointer :offset 16)
   (ccl-ffi::dli_saddr :pointer :offset 24))
 
+(cffi:defcstruct (ccl-ffi::link_map :size 40)
+  (ccl-ffi::l_addr :uint64 :offset 0)
+  (ccl-ffi::l_name :pointer :offset 8)
+  (ccl-ffi::l_ld :pointer :offset 16)
+  (ccl-ffi::l_next :pointer :offset 24)
+  (ccl-ffi::l_prev :pointer :offset 32))
+
+(cffi:defcstruct (ccl-ffi::r_debug :size 40)
+  (ccl-ffi::r_version :int32 :offset 0)
+  (ccl-ffi::r_map :pointer :offset 8)
+  (ccl-ffi::r_brk :uint64 :offset 16)
+  (ccl-ffi::r_state :uint32 :offset 24)
+  (ccl-ffi::r_ldbase :uint64 :offset 32))
+
+(cffi:defcunion (ccl-ffi::<e>lf64_<d>yn_d_un :size 8)
+  (ccl-ffi::d_val :uint64 :offset 0)
+  (ccl-ffi::d_ptr :uint64 :offset 0))
+
+(cffi:defcstruct (ccl-ffi::<e>lf64_<d>yn :size 16)
+  (ccl-ffi::d_tag :int64 :offset 0)
+  (ccl-ffi::d_un (:union ccl-ffi::<e>lf64_<d>yn_d_un) :offset 8))
+
 (defconstant ccl-ffi::rtld_global 256)
 (defconstant ccl-ffi::rtld_noload 4)
 (defconstant ccl-ffi::_sc_clk_tck 2)
@@ -703,6 +765,14 @@
 (defconstant ccl-ffi::af_inet 2)
 (defconstant ccl-ffi::af_inet6 10)
 (defconstant ccl-ffi::af_unix 1)
+(defconstant ccl-ffi::enonet 64)
+(defconstant ccl-ffi::eproto 71)
+(defconstant ccl-ffi::_sc_nprocessors_conf 83)
+(defconstant ccl-ffi::dt_null 0)
+(defconstant ccl-ffi::dt_soname 14)
+(defconstant ccl-ffi::dt_strtab 5)
+(defconstant ccl-ffi::rtld_now 2)
+(defconstant ccl-ffi::_utsname_length 65)
 
 
 (def-external-call "memset" :pointer (ccl-ffi::arg1 :pointer) (ccl-ffi::arg2 :int32) (ccl-ffi::arg3 :uint64))
