@@ -409,11 +409,15 @@ triple (default: the host), with SYSROOT as the root for the target's headers."
       (:float (ecase (second type) (32 :float) (64 :double)))
       ((:struct :union) (list (first type) (record-symbol (second type)))))))
 
-(defun field-form (field)
+;; CFFI's union fields have no :offset.
+(defun field-form (field kind)
   (destructuring-bind (name type offset) field
-    (if (and (consp type) (eq (first type) :array))
-      `(,(record-symbol name) ,(cffi-type (second type)) :count ,(third type) :offset ,offset)
-      `(,(record-symbol name) ,(cffi-type type) :offset ,offset))))
+    (append (if (and (consp type) (eq (first type) :array))
+              `(,(record-symbol name) ,(cffi-type (second type)) :count ,(third type))
+              `(,(record-symbol name) ,(cffi-type type)))
+            (ecase kind
+              (:struct `(:offset ,offset))
+              (:union (assert (eql offset 0)) nil)))))
 
 (defun platform-definitions (info)
   (values
@@ -422,7 +426,7 @@ triple (default: the host), with SYSROOT as the root for the target's headers."
    (loop for (name kind size fields) in (c-info-records info)
          collect `(,(ecase kind (:struct 'cffi:defcstruct) (:union 'cffi:defcunion))
                    (,(record-symbol name) :size ,size)
-                   ,@(mapcar #'field-form fields)))
+                   ,@(mapcar (lambda (field) (field-form field kind)) fields)))
    (loop for (name . value) in (c-info-constants info)
          collect `(defconstant ,(constant-symbol name) ,value))
    (loop for (name symbol return-type arg-types variadic) in (c-info-functions info)

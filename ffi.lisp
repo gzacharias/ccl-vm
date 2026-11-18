@@ -496,8 +496,8 @@
   (ccl-ffi::r_ldbase :uint64 :offset 32))
 
 (cffi:defcunion (ccl-ffi::<e>lf64_<d>yn_d_un :size 8)
-  (ccl-ffi::d_val :uint64 :offset 0)
-  (ccl-ffi::d_ptr :uint64 :offset 0))
+  (ccl-ffi::d_val :uint64)
+  (ccl-ffi::d_ptr :uint64))
 
 (cffi:defcstruct (ccl-ffi::<e>lf64_<d>yn :size 16)
   (ccl-ffi::d_tag :int64 :offset 0)
@@ -706,8 +706,8 @@
   (ccl-ffi::r_ldbase :uint64 :offset 32))
 
 (cffi:defcunion (ccl-ffi::<e>lf64_<d>yn_d_un :size 8)
-  (ccl-ffi::d_val :uint64 :offset 0)
-  (ccl-ffi::d_ptr :uint64 :offset 0))
+  (ccl-ffi::d_val :uint64)
+  (ccl-ffi::d_ptr :uint64))
 
 (cffi:defcstruct (ccl-ffi::<e>lf64_<d>yn :size 16)
   (ccl-ffi::d_tag :int64 :offset 0)
