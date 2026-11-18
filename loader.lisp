@@ -58,6 +58,9 @@
                    (restart-cloop () :report (lambda (s) (format s "Restart CVM toplevel"))))))))))
 
 
+(defun level-1-file (bc-bundle-directory)
+  (make-pathname :name "level-1" :type *bc-type* :defaults bc-bundle-directory))
+
 (defun bundle-directory (bc-bundle)
   "The directory holding the .bc files of BC-BUNDLE, a directory or a .tar.gz of one, which
 gets extracted into a temporary directory."
@@ -69,19 +72,19 @@ gets extracted into a temporary directory."
       (uiop:run-program (list "tar" "-xzf" (uiop:native-namestring bc-bundle)
                               "-C" (uiop:native-namestring dir))
                         :output t :error-output t)
-      ;; The .bc files are in the archive's top directory (ccl-bc/ normally).
+      ;; The bc files are in the archive's top directory (dccl-bc/ or lccl-bc/ normally).
       (let ((subdirs (remove-if (lambda (d) (char= #\. (char (car (last (pathname-directory d))) 0)))
                                 (uiop:subdirectories dir))))
-        (unless (and (= (length subdirs) 1) (probe-file (merge-pathnames "level-1.bc" (first subdirs))))
-          (error "~a doesn't look like a ccl bc bundle: it should have a single top directory with level-1.bc"
-                 bc-bundle))
+        (unless (and (= (length subdirs) 1) (probe-file (level-1-file (first subdirs))))
+          (error "~a doesn't look like a ccl bc bundle for this OS: it should have a single top directory with level-1.~a"
+                 bc-bundle *bc-type*))
         (first subdirs)))))
 
 ;;; ~5 mins
 (defun load-ccl (bc-bundle &key ccl-directory)
   (setq bc-bundle (bundle-directory bc-bundle))
-  (unless (probe-file (merge-pathnames "level-1.bc" bc-bundle))
-    (error "~a doesn't look like a ccl bc directory, it has no level-1.bc" bc-bundle))
+  (unless (probe-file (level-1-file bc-bundle))
+    (error "~a doesn't look like a ccl bc directory for this OS, it has no level-1.~a" bc-bundle *bc-type*))
   (when (and ccl-directory (not (probe-file (merge-pathnames "level-1" ccl-directory))))
     (error "~a doesn't look like ccl directory" ccl-directory))
 
@@ -104,7 +107,7 @@ gets extracted into a temporary directory."
       (cffi:foreign-string-free *fake-heap-image-name*))
     (setq *fake-heap-image-name*
           (cffi:foreign-string-alloc 
-           (namestring (make-pathname :name "level-1" :type "bc" :defaults bc-bundle))))
+           (namestring (level-1-file bc-bundle))))
 
     (setf (sym-value (ccl-symbol '*gf-proto*)) (sym-func (ccl 'gag-any-arg)))
     
@@ -139,7 +142,7 @@ gets extracted into a temporary directory."
 ;; has been loaded and all the initializations in %toplevel-function% in nfasload
 ;; have been executed up.
 (defun cvm-load-level-0 ()
-  (let* ((files (sort (directory "level-0/**/*.bc") ;; TODO: get rid of "bc"? *.fasl-pathname* not defined til l1-files. use *xload-startup-file*?
+  (let* ((files (sort (directory (format nil "level-0/**/*.~a" *bc-type*))
                       #'string-lessp :key #'pathname-name))
          (calls (loop for file in files
                   nconc (let ((*deferred-level-0-calls* (list t)))
@@ -175,7 +178,7 @@ gets extracted into a temporary directory."
       do (ccl-funcall fn))
 
     ;;;; TODO******* So this needs to somehow come in from the compiler, because that's who knowns where it puts it.
-    (%defvar (ccl '*xload-startup-file*) () 'variable (ccl "level-1.bc"))
+    (%defvar (ccl '*xload-startup-file*) () 'variable (ccl (format nil "level-1.~a" *bc-type*)))
     (%defvar (ccl '*openmcl-svn-revision*) () 'variable nil) ;; (local-vc-revision) -- SO THIS NEEDS TO BE FROM COMPILE/XLOAD time again
     (%defvar (ccl '*optional-features*) () 'variable nil) ;(mapcar 'ccl-symbol CCL::*BUILD-TIME-OPTIONAL-FEATURES*)
 
@@ -192,7 +195,7 @@ gets extracted into a temporary directory."
 ;;  be true for bc files.
 
 (defun cvmload  (file)
-  (assert (equal (pathname-type file) "bc"))
+  (assert (equal (pathname-type file) *bc-type*))
   ;; Should we compile then load?  Only worth if can avoid the compile!
   ;; Which means we need to figure out fasl file conventions in the lisp.
   ;; Worry about it later

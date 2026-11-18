@@ -390,9 +390,6 @@
   (assert (eq (sym-pkg sym) *keyword-pkg*))
   (intern (sym-native-pname sym) :keyword))
 
-#-(or darwin linux)
-(error "No CVM target for this OS")
-
 (defun init-packages ()
   ;; Make sure all early sym vars are defined before running any code that might reference them.
   (loop for (symvec . var) in *early-ccl-syms* do (set var symvec))

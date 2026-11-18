@@ -17,6 +17,12 @@
 
 (defun-inline fixnump (x) (typep x 'fixnum))
 
+#-(or darwin linux)
+(error "No CVM target for this OS")
+
+;; The bc file type of the OS's CVM backend.
+(defparameter *bc-type* #+darwin "dbc" #+linux "lbc")
+
 ;;; This must match cvm-arch.  Figure out some way to share
 
 ;; A lot of the front end of the compiler, and some random ccl code, assumes a certain basic

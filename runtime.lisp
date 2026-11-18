@@ -67,12 +67,12 @@
 ;; nfasload's %FASLOAD passes the files this is true of to %CVM-FASLOAD, and reads any
 ;; other file as a native fasl (a cross-compiler's xfasload reads the target's fasls).
 (deflapfunction %cvm-fasl-file-p (namestring)
-  (equal (pathname-type (native-string namestring)) "bc"))
+  (equal (pathname-type (native-string namestring)) *bc-type*))
 
-;; Loads a .bc file.
+;; Loads a bc file.
 (deflapfunction %cvm-fasload (namestring)
   (let* ((filename (native-string namestring)))
-    (assert (equal (pathname-type filename) "bc"))
+    (assert (equal (pathname-type filename) *bc-type*))
     (unless (probe-file filename)
       (error "~s not found" namestring))
     (cvmload filename)
