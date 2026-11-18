@@ -674,6 +674,11 @@
   ;; sizeof(fd_set)
   128)
 
+;; No OS threads to name.
+(deflapfunction set-os-thread-name (lisp-thread name)
+  (declare (ignore lisp-thread name))
+  nil)
+
 (defun kernel-import-new-recursive-lock ()
   (make-ccl-macptr (cffi:foreign-alloc :int8 :count lockptr.size :initial-element 0)))
 
