@@ -1,6 +1,7 @@
 # Reusable workflow, called by vm-test.yml and vm-extended.yml: builds bc-compiler natively,
-# starting from the ccl 1.14 binaries, and compiles the bc bundle.  Uploads the artifacts
-# ccl-bc (the bundle), ccl-native (the native build, for running ccl-tests) and bundle-logs.
+# starting from the ccl 1.14 binaries, and compiles the bc bundles.  Uploads the artifacts
+# ccl-bc (the darwincvm bundle), lccl-bc (the linuxcvm bundle), ccl-native (the native build, for
+# running ccl-tests) and bundle-logs.
 # The steps' scripts are in .github/ci/.
 name: Build bundle
 
@@ -55,8 +56,19 @@ jobs:
           name: ccl-bc
           path: ccl-bc.tar.gz
 
+      - name: Compile the Linux bc bundle
+        env:
+          BC_TARGET: linuxcvm
+          BC_NAME: lccl-bc
+        run: ccl-vm/.github/ci/bc-compile.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lccl-bc
+          path: lccl-bc.tar.gz
+
       - name: Save the native build for ccl-tests
-        run: tar -czf ccl-native.tar.gz --exclude .git --exclude ccl-bc ccl
+        run: tar -czf ccl-native.tar.gz --exclude .git --exclude ccl-bc --exclude lccl-bc ccl
 
       - uses: actions/upload-artifact@v7
         with:

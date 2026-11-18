@@ -1,7 +1,8 @@
 #!/bin/bash
-# usage: install-hosts.sh [--bare] HOST...   (HOST is sbcl or ccl)
+# usage: [BUNDLE_TARBALL=FILE] install-hosts.sh [--bare] HOST...   (HOST is sbcl or ccl)
 # Installs the host lisps that ccl-vm runs on, plus Quicklisp with ccl-vm's dependencies, and
-# unpacks the bc bundle (ccl-bc.tar.gz, downloaded by the workflow) into ./ccl-bc/.
+# unpacks the bc bundle (FILE, default ccl-bc.tar.gz, downloaded by the workflow).
+# sbcl comes from Homebrew, on Linux too (GitHub's ubuntu images have it, off the PATH).
 # --bare: only the lisps and an empty Quicklisp, as a new user has (no dependencies, no bundle).
 # For the ccl host, installs the released ccl 1.14 for this machine (Intel or Apple Silicon) in ./ccl-host/ and records its path in
 # CCL_HOST (for the later steps, via GITHUB_ENV).
@@ -16,6 +17,10 @@ CCL_HOST=$PWD/ccl-host/$CCL_KERNEL
 for host in "$@"; do
   case $host in
     sbcl)
+      if ! command -v brew > /dev/null && [ -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
+        eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+        [ -n "${GITHUB_PATH:-}" ] && echo /home/linuxbrew/.linuxbrew/bin >> "$GITHUB_PATH"
+      fi
       brew install sbcl
       sbcl --version ;;
     ccl)
@@ -45,4 +50,4 @@ for host in "$@"; do
   esac
 done
 
-tar -xzf ccl-bc.tar.gz
+tar -xzf "${BUNDLE_TARBALL:-ccl-bc.tar.gz}"

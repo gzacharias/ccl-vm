@@ -1,13 +1,14 @@
 # Native platforms (matrix A): on Intel and Apple Silicon macs and x86-64 and arm64 Linux, builds
 # bc-compiler from the ccl 1.14 binaries (twice; the second rebuild must be warning-free), runs
-# the regression tests and compiles the bc bundle.  The compare job then requires every
-# platform's bundle to be byte-identical, and uploads the Intel mac one as the native bundle
-# (artifact ccl-bc), from which gen2.yml makes the canonical bundle.  The ccl-tests job runs
+# the regression tests and compiles both bc bundles, darwincvm and linuxcvm.  The compare job then
+# requires every platform's bundles to be byte-identical, and uploads the Intel mac's as the native
+# bundles (artifacts ccl-bc, the darwincvm one, and lccl-bc), from which gen2.yml makes the
+# canonical ones.  The ccl-tests job runs
 # ccl-tests on each native build, which fails only on tests that pass on upstream-base (the
 # upstream ccl that bc-compiler was last merged with), per ccl-tests-baseline.yml.  Every cell
 # runs to the end even if another fails.  The platforms input picks a subset of the labels (the
-# quick check uses the two macs).  Artifacts: ccl-bc-LABEL, ccl-native-LABEL (the native build),
-# logs-LABEL, ccl-bc, and ccl-tests-baseline-LABEL (also used by cross.yml); outputs
+# quick check uses the two macs).  Artifacts: ccl-bc-LABEL, lccl-bc-LABEL, ccl-native-LABEL (the
+# native build), logs-LABEL, ccl-bc, lccl-bc, and ccl-tests-baseline-LABEL (also used by cross.yml); outputs
 # ccl_tests_ref, the ccl-tests commit to run, and upstream_base, the baselines' upstream-base commit.
 # The steps' scripts are in .github/ci/.
 name: Native builds
@@ -88,12 +89,24 @@ jobs:
         with:
           name: ccl-bc-${{ matrix.label }}
           path: ccl-bc.tar.gz
+      - name: Compile the Linux bc bundle
+        id: lbundle
+        if: ${{ !cancelled() && steps.build2.outcome == 'success' }}
+        env:
+          BC_TARGET: linuxcvm
+          BC_NAME: lccl-bc
+        run: ccl-vm/.github/ci/bc-compile.sh
+      - if: ${{ !cancelled() && steps.lbundle.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: lccl-bc-${{ matrix.label }}
+          path: lccl-bc.tar.gz
       - name: Regression tests on the native build
         if: ${{ !cancelled() && steps.build2.outcome == 'success' }}
         run: ccl-vm/tests/regression/run.sh native ccl
       - name: Save the native build
         if: ${{ !cancelled() && steps.build2.outcome == 'success' }}
-        run: tar -czf ccl-native.tar.gz --exclude .git --exclude ccl-bc ccl
+        run: tar -czf ccl-native.tar.gz --exclude .git --exclude ccl-bc --exclude lccl-bc ccl
       - if: ${{ !cancelled() && steps.build2.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
@@ -119,29 +132,41 @@ jobs:
           path: ccl-vm
       - uses: actions/download-artifact@v8
         with:
-          pattern: ccl-bc-*
+          pattern: "*ccl-bc-*"
       - name: Every bundle must equal the Intel mac one
         env:
           PLATFORMS: ${{ inputs.platforms || '["intel", "arm64", "linux-x86", "linux-arm64"]' }}
         run: |
-          others=()
-          for label in $(echo "$PLATFORMS" | tr -d '[]",'); do
-            [ $label = intel ] || others+=("$label=ccl-bc-$label/ccl-bc.tar.gz")
+          status=0
+          for b in ccl-bc lccl-bc; do
+            others=()
+            for label in $(echo "$PLATFORMS" | tr -d '[]",'); do
+              [ $label = intel ] || others+=("$label=$b-$label/$b.tar.gz")
+            done
+            ccl-vm/.github/ci/compare-bundles.sh "intel=$b-intel/$b.tar.gz" "${others[@]}" || status=1
           done
-          ccl-vm/.github/ci/compare-bundles.sh "intel=ccl-bc-intel/ccl-bc.tar.gz" "${others[@]}"
+          exit $status
       - if: ${{ failure() }}
         uses: actions/upload-artifact@v7
         with:
           name: bundle-diff
           path: bundle-diff.txt
-      - name: The canonical bundle
-        if: ${{ !cancelled() && hashFiles('ccl-bc-intel/ccl-bc.tar.gz') != '' }}
-        run: mv ccl-bc-intel/ccl-bc.tar.gz .
+      - name: The native bundles
+        if: ${{ !cancelled() }}
+        run: |
+          [ -f ccl-bc-intel/ccl-bc.tar.gz ] && mv ccl-bc-intel/ccl-bc.tar.gz .
+          [ -f lccl-bc-intel/lccl-bc.tar.gz ] && mv lccl-bc-intel/lccl-bc.tar.gz .
+          true
       - if: ${{ !cancelled() && hashFiles('ccl-bc.tar.gz') != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: ccl-bc
           path: ccl-bc.tar.gz
+      - if: ${{ !cancelled() && hashFiles('lccl-bc.tar.gz') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: lccl-bc
+          path: lccl-bc.tar.gz
 
   baseline:
     uses: ./.github/workflows/ccl-tests-baseline.yml

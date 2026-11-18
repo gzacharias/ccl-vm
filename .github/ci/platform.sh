@@ -1,6 +1,8 @@
 # Sourced by the other scripts.  Sets, for the machine this runs on:
 #   CCL_PLATFORM  the name in the ccl 1.14 release tarballs (darwinx86, darwinarm64, linuxx86, linuxarm64)
 #   CCL_KERNEL    the native kernel's name (dx86cl64, darm64cl, lx86cl64, arm64cl)
+#   CVM_TARGET    the CVM target whose bundles the VM runs here (darwincvm, linuxcvm)
+#   CVM_BUNDLE    that target's bundle name, as in the release assets (dccl-bc, lccl-bc)
 # and defines
 #   fetch_release FILE        downloads FILE from the ccl 1.14 release into the current directory
 #                             unless it's already there, and prints its path
@@ -16,6 +18,10 @@ case $(uname -s)-$(uname -m) in
   Linux-aarch64) CCL_PLATFORM=linuxarm64  CCL_KERNEL=arm64cl ;;
   Linux-x86_64)  CCL_PLATFORM=linuxx86    CCL_KERNEL=lx86cl64 ;;
   *) echo "::error::unknown platform $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+esac
+case $(uname -s) in
+  Darwin) CVM_TARGET=darwincvm CVM_BUNDLE=dccl-bc ;;
+  Linux)  CVM_TARGET=linuxcvm  CVM_BUNDLE=lccl-bc ;;
 esac
 
 fetch_release() {

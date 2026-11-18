@@ -1,5 +1,5 @@
-# After a release is published: on both macs and both host lisps, follow the README exactly as a
-# new user would, with the published bundle (releases/latest) and ccl-vm at the release's tag
+# After a release is published: on both macs and both host lisps, and on x86-64 Linux with sbcl,
+# follow the README exactly as a new user would, with the published bundle for the OS (releases/latest) and ccl-vm at the release's tag
 # (readme-check.sh), with an empty Quicklisp (no preloaded dependencies).  Catches a bundle that
 # doesn't match its ccl-vm, a README that's out of date, and setup the CI scripts paper over.
 # Can also be dispatched with a tag.
@@ -27,7 +27,10 @@ jobs:
       matrix:
         host: [sbcl, ccl]
         mac: [intel, arm64]
-    runs-on: ${{ matrix.mac == 'arm64' && (vars.ARM64_MACOS_RUNNER || 'macos-latest') || 'macos-15-intel' }}
+        include:
+          - host: sbcl
+            mac: linux
+    runs-on: ${{ matrix.mac == 'linux' && 'ubuntu-latest' || matrix.mac == 'arm64' && (vars.ARM64_MACOS_RUNNER || 'macos-latest') || 'macos-15-intel' }}
     timeout-minutes: 60
     steps:
       # Only for the scripts that install the host lisp; the README is followed with a fresh clone.

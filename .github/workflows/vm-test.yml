@@ -1,5 +1,5 @@
-# The quick check: builds bc-compiler natively and compiles the native bc bundle (bundle.yml),
-# makes the canonical bundle from it, generations 1 and 2 on sbcl (gen2.yml), then in parallel
+# The quick check: builds bc-compiler natively and compiles the native bc bundles (bundle.yml),
+# makes the canonical bundles from them, generations 1 and 2 on sbcl (gen2.yml), then in parallel
 # runs ccl-tests on the native build (failing only on tests that pass on upstream-base,
 # ccl-tests-baseline.yml) and tests generation 2 in ccl-vm on an Intel mac: boots it on
 # sbcl and on ccl 1.14, and on sbcl cross-compiles a native ccl from a clean upstream ccl
@@ -7,8 +7,8 @@
 # vm-extended.yml.
 # A push to the ci branch tests gzacharias/ccl's ci branch and runs every step; so does a push
 # to gzacharias/ccl's bc-compiler, whose bc-compiler.yml calls this workflow.  The release-bundle
-# job reports (as a warning, not a failure) whether generation 2 matches the latest release's
-# bundle.
+# job reports (as a warning, not a failure) whether each generation 2 matches the latest release's
+# bundle (dccl-bc.tar.gz, lccl-bc.tar.gz).
 # (Run workflow only shows up once this file is on the default branch.)
 # The steps' scripts are in .github/ci/.
 name: Build bundle and test VM
@@ -58,7 +58,7 @@ jobs:
       ccl_ref: ${{ inputs.ccl_ref || 'ci' }}
       ccl_vm_ref: ${{ inputs.ccl_vm_ref || github.sha }}
 
-  # Is generation 2 byte-identical to the bundle in the latest ccl-vm release?
+  # Are the generation 2 bundles byte-identical to the ones in the latest ccl-vm release?
   release-bundle:
     needs: gen2
     if: ${{ !cancelled() }}
@@ -73,31 +73,40 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: ccl-bc-gen2
+          pattern: "?ccl-bc-gen2"
 
-      - name: Compare with the latest release's bundle
+      - name: Compare with the latest release's bundles
         shell: bash   # pipefail: a harness failure in compare-bundles.sh still fails the step
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=$(gh release view -R gzacharias/ccl-vm --json tagName --jq .tagName)
-          gh release download "$tag" -R gzacharias/ccl-vm -p ccl-bc.tar.gz -O release-bc.tar.gz
-          COMPARE_LEVEL=warning ccl-vm/.github/ci/compare-bundles.sh \
-            "release $tag=release-bc.tar.gz" "generation 2=ccl-bc.tar.gz" | tee compare.txt
-          if [ -f bundle-diff.txt ]; then
-            msg="The $tag release asset ccl-bc.tar.gz does not match this bc-compiler: if this is what users get from GitHub, replace the asset with this run's ccl-bc-gen2 artifact."
-            echo "::warning::$msg"
-          else
-            msg="The $tag release asset ccl-bc.tar.gz matches this bc-compiler."
-          fi
-          { echo "### Bundle vs release $tag"; echo "$msg"; echo '```'; grep -v '^[<>]' compare.txt | head -60; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          echo "### Bundles vs release $tag" >> "$GITHUB_STEP_SUMMARY"
+          for b in dccl-bc lccl-bc; do
+            mkdir -p release
+            if ! gh release download "$tag" -R gzacharias/ccl-vm -p $b.tar.gz -D release; then
+              msg="The $tag release has no $b.tar.gz: upload this run's $b-gen2 artifact as its asset."
+              echo "::warning::$msg"; echo "$msg" >> "$GITHUB_STEP_SUMMARY"; continue
+            fi
+            rm -f bundle-diff.txt
+            COMPARE_LEVEL=warning ccl-vm/.github/ci/compare-bundles.sh \
+              "release $tag=release/$b.tar.gz" "generation 2=$b-gen2/$b.tar.gz" | tee compare-$b.txt
+            if [ -f bundle-diff.txt ]; then
+              mv bundle-diff.txt bundle-diff-$b.txt
+              msg="The $tag release asset $b.tar.gz does not match this bc-compiler: if this is what users get from GitHub, replace the asset with this run's $b-gen2 artifact."
+              echo "::warning::$msg"
+            else
+              msg="The $tag release asset $b.tar.gz matches this bc-compiler."
+            fi
+            { echo "$msg"; echo '```'; grep -v '^[<>]' compare-$b.txt | head -60; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Keep the differences
-        if: ${{ hashFiles('bundle-diff.txt') != '' }}
+        if: ${{ hashFiles('bundle-diff-*.txt') != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: release-bundle-diff
-          path: bundle-diff.txt
+          path: bundle-diff-*.txt
 
   baseline:
     uses: ./.github/workflows/ccl-tests-baseline.yml

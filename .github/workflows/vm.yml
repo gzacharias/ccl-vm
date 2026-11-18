@@ -5,7 +5,7 @@
 # requires every one to be byte-identical to sbcl-intel's (artifact gen1-sbcl-intel, from
 # gen2.yml, which sbcl-intel doesn't redo).  That is why only sbcl-intel's generation 2 is booted
 # and tested: every host would have built the same one.  Without checks, the regression tests are
-# skipped.  With release_tag, the bundle is that release's ccl-bc.tar.gz instead, the
+# skipped.  With release_tag, the bundle is that release's dccl-bc.tar.gz instead, the
 # rebuild_hosts cells rebuild from it (sbcl-intel too), and there is no artifact from this run.
 # Called by nightly.yml, quick.yml and released.yml.  The steps' scripts are in .github/ci/.
 name: VM tests
@@ -75,7 +75,10 @@ jobs:
         if: ${{ inputs.release_tag != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download "${{ inputs.release_tag }}" -R "$GITHUB_REPOSITORY" -p ccl-bc.tar.gz
+        # Unpacked by install-hosts.sh into ./dccl-bc/; renamed to the ./ccl-bc/ the steps use.
+        run: |
+          gh release download "${{ inputs.release_tag }}" -R "$GITHUB_REPOSITORY" -p dccl-bc.tar.gz
+          tar -xzf dccl-bc.tar.gz && mv dccl-bc ccl-bc && tar -czf ccl-bc.tar.gz ccl-bc && rm -r ccl-bc dccl-bc.tar.gz
       - name: Install ${{ matrix.host }} and Quicklisp
         run: ccl-vm/.github/ci/install-hosts.sh ${{ matrix.host }}
 
