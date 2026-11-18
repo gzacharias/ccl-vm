@@ -18,7 +18,7 @@ bundle_dir() {
     echo "$d/$(ls "$d" | head -1)"
   fi
 }
-count() { find "$1" -name '*.bc' | wc -l | tr -d ' '; }
+count() { find "$1" -name '*.[dl]bc' | wc -l | tr -d ' '; }
 ref_label=${1%%=*}
 ref=$(bundle_dir "${1#*=}")
 shift

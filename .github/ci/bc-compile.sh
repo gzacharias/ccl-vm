@@ -15,5 +15,5 @@ log=$PWD/bc.log
 EOF
 cat "$log"
 grep -qx BC-DONE "$log" || { echo "::error::bc-compile-ccl didn't finish"; exit 1; }
-echo "bc files: $(find "$dir/ccl-bc" -name '*.bc' | wc -l | tr -d ' ')"
+echo "bc files: $(find "$dir/ccl-bc" -name '*.[dl]bc' | wc -l | tr -d ' ')"
 COPYFILE_DISABLE=1 tar -czf ccl-bc.tar.gz -C "$dir" ccl-bc

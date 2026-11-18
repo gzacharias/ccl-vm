@@ -19,6 +19,6 @@ EOF
 tail -40 "$name.log"
 # Whole-line match: a backtrace can quote the form's source.
 grep -qx VM-REBUILD-DONE "$name.log" || exit 1
-count=$(find "$name" -name '*.bc' | wc -l | tr -d ' ')
+count=$(find "$name" -name '*.[dl]bc' | wc -l | tr -d ' ')
 echo "bc files in $name: $count"
-[ "$count" -eq "$(find "$bundle" -name '*.bc' | wc -l | tr -d ' ')" ] || { echo "::error::$name has $count bc files, $bundle has a different number"; exit 1; }
+[ "$count" -eq "$(find "$bundle" -name '*.[dl]bc' | wc -l | tr -d ' ')" ] || { echo "::error::$name has $count bc files, $bundle has a different number"; exit 1; }

@@ -13,7 +13,7 @@ rm -rf "$w"; mkdir -p "$w"; cd "$w" || exit 1
 curl -sSL -O https://github.com/gzacharias/ccl-vm/releases/latest/download/ccl-bc.tar.gz || exit 1
 tar -xzf ccl-bc.tar.gz || exit 1
 git clone -q --branch "$tag" https://github.com/gzacharias/ccl-vm.git ccl-vm || exit 1
-echo "bundle: $(find ccl-bc -name '*.bc' | wc -l | tr -d ' ') bc files, sha256 $(shasum -a 256 ccl-bc.tar.gz | cut -c1-12); ccl-vm $(git -C ccl-vm rev-parse --short HEAD)"
+echo "bundle: $(find ccl-bc -name '*.[dl]bc' | wc -l | tr -d ' ') bc files, sha256 $(shasum -a 256 ccl-bc.tar.gz | cut -c1-12); ccl-vm $(git -C ccl-vm rev-parse --short HEAD)"
 # The README's host forms, one --eval each; stdin goes to the VM's listener only (the host's REPL
 # would otherwise buffer part of it).
 host_forms=(
