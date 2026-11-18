@@ -64,6 +64,10 @@
   (let ((*package* *native-package*))
     (apply #'break (native-string str) args)))
 
+;; The bc file type of the CVM backend for the platform we're running on, NIL if there is none.
+;; Bundles are recognized by it, as ccl recognizes its heap images by name.
+(defparameter *bc-type* #+darwin "dbc" #+linux "lbc" #-(or darwin linux) nil)
+
 ;; nfasload's %FASLOAD passes the files this is true of to %CVM-FASLOAD, and reads any
 ;; other file as a native fasl (a cross-compiler's xfasload reads the target's fasls).
 (deflapfunction %cvm-fasl-file-p (namestring)
@@ -807,7 +811,8 @@
   (ff-ftruncate fd length))
 
 #-(or darwin freebsd linux)
-(error "%GET-ERRNO: need a way to read errno on this OS")
+(deflapfunction %get-errno ()
+  (error "%GET-ERRNO: need a way to read errno on this OS"))
 
 #+(or darwin freebsd linux)
 (deflapfunction %get-errno ()

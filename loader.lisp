@@ -76,15 +76,17 @@ gets extracted into a temporary directory."
       (let ((subdirs (remove-if (lambda (d) (char= #\. (char (car (last (pathname-directory d))) 0)))
                                 (uiop:subdirectories dir))))
         (unless (and (= (length subdirs) 1) (probe-file (level-1-file (first subdirs))))
-          (error "~a doesn't look like a ccl bc bundle for this OS: it should have a single top directory with level-1.~a"
+          (error "~a doesn't look like a ccl bc bundle for this platform: it should have a single top directory with level-1.~a"
                  bc-bundle *bc-type*))
         (first subdirs)))))
 
 ;;; ~5 mins
 (defun load-ccl (bc-bundle &key ccl-directory)
+  (unless *bc-type*
+    (error "There is no CVM target for this platform (~a ~a)" (software-type) (machine-type)))
   (setq bc-bundle (bundle-directory bc-bundle))
   (unless (probe-file (level-1-file bc-bundle))
-    (error "~a doesn't look like a ccl bc directory for this OS, it has no level-1.~a" bc-bundle *bc-type*))
+    (error "~a doesn't look like a ccl bc directory for this platform, it has no level-1.~a" bc-bundle *bc-type*))
   (when (and ccl-directory (not (probe-file (merge-pathnames "level-1" ccl-directory))))
     (error "~a doesn't look like ccl directory" ccl-directory))
 
