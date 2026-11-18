@@ -9,7 +9,7 @@
 ;;; section can also be made here, given its headers: :target, :sysroot and :features.)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (ql:quickload '("com.inuoe.jzon" "cffi") :silent t))
+  (ql:quickload '("com.inuoe.jzon" "cffi" "trivial-features") :silent t))
 
 (defpackage "CCL-VM-GEN-FFI" (:use "COMMON-LISP") (:export "GEN-FFI"))
 
