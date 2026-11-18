@@ -9,9 +9,9 @@
 ;;; section can also be made here, given its headers: :target, :sysroot and :features.)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (ql:quickload '("com.inuoe.jzon" "cffi" "trivial-features") :silent t))
+  (ql:quickload '("alexandria" "com.inuoe.jzon" "cffi" "trivial-features") :silent t))
 
-(defpackage "CCL-VM-GEN-FFI" (:use "COMMON-LISP") (:export "GEN-FFI"))
+(defpackage "CCL-VM-GEN-FFI" (:use "COMMON-LISP") (:import-from "ALEXANDRIA" "STARTS-WITH-SUBSEQ") (:export "GEN-FFI"))
 
 (in-package "CCL-VM-GEN-FFI")
 
@@ -91,7 +91,7 @@
                     when (equal (node-kind decl) "EnumDecl")
                       do (loop for enumerator across (or (node-inner decl) #())
                                for name = (node-name enumerator)
-                               when (and name (uiop:string-prefix-p "ffi_info_" name))
+                               when (and name (starts-with-subseq "ffi_info_" name))
                                  do (setf (aref results (parse-integer name :start 9))
                                           (parse-integer (enumerator-value enumerator)))))
               (return results))
@@ -133,9 +133,9 @@
   (let ((s (strip-qualifiers string)))
     (cond ((and (plusp (length s)) (char= (char s (1- (length s))) #\])) :array)
           ((or (find #\* s) (find #\^ s)) :pointer)
-          ((uiop:string-prefix-p "enum " s) :int)
+          ((starts-with-subseq "enum " s) :int)
           ((find #\( s) :function)
-          ((or (uiop:string-prefix-p "struct " s) (uiop:string-prefix-p "union " s)) :record)
+          ((or (starts-with-subseq "struct " s) (starts-with-subseq "union " s)) :record)
           ((member s '("float" "double" "long double" "_Float16") :test #'string=) :float)
           ((string= s "void") :void)
           (t :int))))
@@ -475,7 +475,7 @@ triple (default: the host), with SYSROOT as the root for the target's headers."
           (header nil)
           (sections nil))
       (dolist (line lines)
-        (if (uiop:string-prefix-p "#+" line)
+        (if (starts-with-subseq "#+" line)
           (push (list line) sections)
           (if sections (push line (first sections)) (push line header))))
       (flet ((text (lines) (format nil "~{~a~%~}" (reverse lines))))
@@ -504,7 +504,7 @@ triple (default: the host), with SYSROOT as the root for the target's headers."
                                                   (append types records constants functions))))
             (first-line (format nil "#+~a" features)))
         (multiple-value-bind (header sections) (read-sections file)
-          (let ((old (position-if (lambda (text) (uiop:string-prefix-p (format nil "~a~%" first-line) text)) sections)))
+          (let ((old (position-if (lambda (text) (starts-with-subseq (format nil "~a~%" first-line) text)) sections)))
             (if old
               (setf (nth old sections) section)
               (setq sections (append sections (list section)))))
