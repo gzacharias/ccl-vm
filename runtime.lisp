@@ -235,6 +235,9 @@
     (assert (null accessors)) ;; true for now
     (* 8 (cffi:foreign-type-size (cffi-type-name type)))))
 
+(deflapfunction cvm-foreign-field-byte-offset (record-name field-name)
+  (cffi:foreign-slot-offset (cffi-type-name record-name) (cffi-symbol field-name)))
+
 
 ;;; *** TODO: I think the change I made to accept  record.field in record-size might be confused as to whether you are looking
 ;;;   at an embedded structure or a pointer to a structure?  CHeck it out.
