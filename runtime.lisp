@@ -282,8 +282,8 @@
   (if (logbitp 31 word) (logior word (ash -1 32)) word))
 
 ;; The C names the bundle uses (#$, records, #_), and the integer types the function signatures use:
-;; ffi.lisp has their definitions for each platform.  After changing this, regenerate every
-;; section of ffi.lisp, as described there.
+;; ffi.lisp has their definitions for each platform.  After changing this, regenerate ffi.lisp as 
+;; described there.
 (defparameter *ffi-names*
   '(:headers ("sys/types.h" "sys/stat.h" "sys/time.h" "sys/resource.h" "sys/socket.h" "sys/utsname.h"
               "dirent.h" "dlfcn.h" "errno.h" "fcntl.h" "unistd.h" "netdb.h" "limits.h" "stdio.h" "stdlib.h"
