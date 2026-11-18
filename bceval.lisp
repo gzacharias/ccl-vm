@@ -738,7 +738,7 @@
 
 ;; level 0
 
-(defbceval $bc-current-tcr () 23)
+(defbceval $bc-current-tcr () '*current-tcr*)
 
 (defbceval $bc-interrupt-level () #+vmthreads *interrupt-level* 0)
 

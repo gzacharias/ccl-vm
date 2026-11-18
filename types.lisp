@@ -483,6 +483,13 @@ Or maybe have like ivectors and gvectors and only ivectors have complex data.
 (defconstant lockptr.size 56)
 (defconstant rwlock.size 64)
 
+;; The VM's one tcr, as (%current-tcr) returns it: zeroed memory, so OS thread id 0 means no OS thread.
+(defconstant tcr.size 8)
+(defvar *current-tcr*
+  (let ((address (cffi:pointer-address (cffi:foreign-alloc :int8 :count tcr.size :initial-element 0))))
+    (assert (zerop (ldb (byte fixnum-shift 0) address)))
+    (ash address (- fixnum-shift))))
+
 (defun make-rw-lock-obj ()
   (make-uvector subtag-lock
                 (vector (make-ccl-macptr (cffi:foreign-alloc :int8 :count rwlock.size :initial-element 0) $flags_DisposeRwLock)

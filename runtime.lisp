@@ -674,11 +674,6 @@
   ;; sizeof(fd_set)
   128)
 
-;; No OS threads to name.
-(deflapfunction set-os-thread-name (lisp-thread name)
-  (declare (ignore lisp-thread name))
-  nil)
-
 (defun kernel-import-new-recursive-lock ()
   (make-ccl-macptr (cffi:foreign-alloc :int8 :count lockptr.size :initial-element 0)))
 
@@ -1629,11 +1624,11 @@
 (defvar *ccl-toplevel-func* nil)
 
 (deflapfunction %tcr-toplevel-function (tcr)
-  (assert (eql tcr 23)) ;; see $bc-current-tcr
+  (assert (eql tcr *current-tcr*))
   *ccl-toplevel-func*)
 
 (deflapfunction %set-tcr-toplevel-function (tcr func)
-  (assert (eql tcr 23)) ;; see $bc-current-tcr
+  (assert (eql tcr *current-tcr*))
   (setq *ccl-toplevel-func* func))
 
 (deflapfunction %no-thread-local-binding-marker () 'no-thread-local-binding-marker)
