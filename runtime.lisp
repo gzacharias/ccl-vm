@@ -210,6 +210,7 @@
   (ccl-ffi::value (:union ccl-ffi::dbm-constant-value)))
 
 ;; This is what we seem to get from ff-readdir
+#+darwin
 (cffi:defcstruct ccl-ffi::dirent32
   (ccl-ffi::d_ino :uint32)
   (ccl-ffi::d_reclen :uint16)
@@ -693,16 +694,16 @@
   (file_name  :pointer)
   (result :pointer))
 
-;; The $INODE64 variants exist only on x86-64; arm64 has the 64-bit inode layout natively.
-(cffi:defcfun (ff-stat #+x86-64 "stat$INODE64" #-x86-64 "stat") :int
+;; Darwin's $INODE64 variants exist only on x86-64; arm64 has the 64-bit inode layout natively.
+(cffi:defcfun (ff-stat #+(and darwin x86-64) "stat$INODE64" #-(and darwin x86-64) "stat") :int
   (file_name  :pointer)
   (buf :pointer))
 
-(cffi:defcfun (ff-fstat #+x86-64 "fstat$INODE64" #-x86-64 "fstat") :int
+(cffi:defcfun (ff-fstat #+(and darwin x86-64) "fstat$INODE64" #-(and darwin x86-64) "fstat") :int
   (fd  :int)
   (buf :pointer))
 
-(cffi:defcfun (ff-lstat #+x86-64 "lstat$INODE64" #-x86-64 "lstat") :int
+(cffi:defcfun (ff-lstat #+(and darwin x86-64) "lstat$INODE64" #-(and darwin x86-64) "lstat") :int
   (path :pointer)
   (buf :pointer))
 
@@ -761,6 +762,7 @@
 (defun kernel-import-lisp-readdir (dir)
   (let ((dirent (ff-readdir (%macptr-ptr dir))))
     ;; The caller expects dirent, but we seem to get dirent32
+    #+darwin
     (unless (cffi:null-pointer-p dirent)
       (unless (eql 0 (cffi:foreign-slot-value dirent '(:struct ccl-ffi::dirent32) 'ccl-ffi::d_namlen))
         ;; we have a dirent32.  The only thing the caller cares about is d_name, so rearrage it so
@@ -819,7 +821,7 @@
   (name (:pointer :char)))
 
 (defconstant u64-mask #xFFFFFFFFFFFFFFFF)
-(defconstant RTLD_DEFAULT (logand u64-mask -2))
+(defconstant RTLD_DEFAULT #+darwin (logand u64-mask -2) #-darwin 0)
 
 ;; Used by foreign-symbol-entry and foreign-symbol-address. 
 (defun kernel-import-findsymbol (handle name)

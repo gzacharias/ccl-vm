@@ -390,6 +390,9 @@
   (assert (eq (sym-pkg sym) *keyword-pkg*))
   (intern (sym-native-pname sym) :keyword))
 
+#-(or darwin linux)
+(error "No CVM target for this OS")
+
 (defun init-packages ()
   ;; Make sure all early sym vars are defined before running any code that might reference them.
   (loop for (symvec . var) in *early-ccl-syms* do (set var symvec))
@@ -431,8 +434,8 @@
     (setq *keyword-pkg* (initial-pkg '("KEYWORD") ()))
     (setq *ccl-pkg*     (initial-pkg '("CCL") '("COMMON-LISP")))
     (setq *target-pkg*  (initial-pkg '("CVM" "TARGET") '("COMMON-LISP")))
-    (setq *os-pkg*      (initial-pkg '("CVM-DARWIN64" "OS") '("COMMON-LISP")))
-    (setq *ffi-pkg*     (initial-pkg '("CVMDARWIN-FFI") ())))
+    (setq *os-pkg*      (initial-pkg '(#+darwin "CVM-DARWIN64" #+linux "CVM-LINUX64" "OS") '("COMMON-LISP")))
+    (setq *ffi-pkg*     (initial-pkg '(#+darwin "CVMDARWIN-FFI" #+linux "CVMLINUX-FFI") ())))
 
  ;; Initialize the COMMON-LISP package..  Assume our host is compliant and just copy theirs.
   ;; Has to happen before we start loading files with references to CL symbols in ccl package,
