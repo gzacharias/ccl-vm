@@ -5,8 +5,8 @@
 # canonical bundle, what a release ships: artifacts dccl-bc-gen2 and lccl-bc-gen2, each holding the
 # release asset (dccl-bc.tar.gz, unpacking into ./dccl-bc/, and lccl-bc.tar.gz, into ./lccl-bc/).
 # The darwincvm one is also artifact ccl-bc-gen2 (a ccl-bc.tar.gz that unpacks into ./ccl-bc/),
-# where every other VM test starts.  Generation 1 is kept as artifact gen1-sbcl-intel, the
-# reference for vm.yml's cross-host comparison.  (Generation 1 is not the native bundle: they
+# where every other VM test starts.  Generation 1 is kept as artifacts gen1-sbcl-intel and
+# gen1-sbcl-linux, the references for vm.yml's cross-host comparisons.  (Generation 1 is not the native bundle: they
 # differ in every file, ccl-vm#13.)  Called by quick.yml, nightly.yml, vm-test.yml and
 # vm-extended.yml.  The steps' scripts are in .github/ci/.
 name: Canonical bundle
@@ -129,6 +129,12 @@ jobs:
       - name: Generation 1 (rebuild ccl in the VM from the native bundle)
         timeout-minutes: 150
         run: ccl-vm/.github/ci/vm-rebuild.sh sbcl lccl-bc gen1
+      - name: Save generation 1
+        run: tar -czf gen1.tar.gz gen1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gen1-sbcl-linux
+          path: gen1.tar.gz
       - name: Generation 2 (rebuild ccl in the VM from generation 1)
         id: gen2
         timeout-minutes: 150

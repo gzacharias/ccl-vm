@@ -1,6 +1,6 @@
 # The full suite: native builds on every platform (native.yml), then the canonical bundle,
-# generations 1 and 2 on sbcl on the Intel mac (gen2.yml), then, in parallel, every VM host on both
-# macs on generation 2, with every host's generation 1 compared (vm.yml), and every cross-compile
+# generations 1 and 2 on sbcl on the Intel mac and x86-64 Linux (gen2.yml), then, in parallel, every
+# VM host on both macs and Linux on generation 2, with every host's generation 1 compared (vm.yml), and every cross-compile
 # of upstream-base (cross.yml).
 # Dispatch by hand, or push to the ci-nightly branch (tests gzacharias/ccl's ci branch).
 name: Nightly

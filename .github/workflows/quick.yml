@@ -1,6 +1,6 @@
 # The quick check for a push: native builds, ccl-tests and bundles on the two macs (native.yml),
-# then the canonical bundle, generations 1 and 2 on sbcl on the Intel mac (gen2.yml), then the VM
-# on sbcl and ccl on both macs on generation 2: boot and regression tests (vm.yml, without the
+# then the canonical bundles, generations 1 and 2 on sbcl on the Intel mac and Linux (gen2.yml), then the VM
+# on sbcl and ccl on both macs and Linux on generation 2: boot and regression tests (vm.yml, without the
 # cross-host comparison).  The full suite is nightly.yml.
 # A push to the ci-quick branch tests gzacharias/ccl's ci branch.
 name: Quick check
