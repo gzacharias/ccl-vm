@@ -1,10 +1,10 @@
-# VM hosts (matrix C): {sbcl, ccl 1.14} x {Intel mac, Apple Silicon mac, x86-64 Linux}, all on the
+# VM hosts (matrix C): {sbcl, ccl 1.14} x {Intel mac, Apple Silicon mac, x86-64 Linux, arm64 Linux}, all on the
 # canonical bundle for the OS (artifact ccl-bc-gen2 on the macs, lccl-bc-gen2 on Linux, from
 # gen2.yml in the same run).  Each cell boots the bundle (smoke) and runs the regression tests
 # (tests/regression).  The rebuild_hosts cells also rebuild ccl in the VM from the native bundle
 # (artifact ccl-bc, or lccl-bc on Linux), making their own generation 1, and the compare job
 # requires every one to be byte-identical to the reference for its OS: sbcl-intel's on the macs,
-# sbcl-linux's on Linux (artifacts gen1-sbcl-intel and gen1-sbcl-linux, from gen2.yml, which
+# sbcl-linux-x86's on Linux (artifacts gen1-sbcl-intel and gen1-sbcl-linux-x86, from gen2.yml, which
 # those cells don't redo).  That is why only the reference's generation 2 is booted and tested:
 # every host would have built the same one.  Without checks, the regression tests are skipped.
 # With release_tag, the bundle is that release's dccl-bc.tar.gz or lccl-bc.tar.gz instead, the
@@ -23,9 +23,9 @@ on:
         type: string
         default: '["sbcl", "ccl"]'
       platforms:
-        description: "JSON list of platforms (intel, arm64, linux)"
+        description: "JSON list of platforms (intel, arm64, linux-x86, linux-arm64)"
         type: string
-        default: '["intel", "arm64", "linux"]'
+        default: '["intel", "arm64", "linux-x86", "linux-arm64"]'
       rebuild_hosts:
         description: "JSON list of the host lisps that also rebuild ccl in the VM, for the cross-host comparison"
         type: string
@@ -53,14 +53,14 @@ jobs:
         host: ${{ fromJSON(inputs.hosts) }}
         platform: ${{ fromJSON(inputs.platforms) }}
     # (runs-on can't see env.)
-    runs-on: ${{ matrix.platform == 'linux' && 'ubuntu-latest' || matrix.platform == 'arm64' && (vars.ARM64_MACOS_RUNNER || 'macos-latest') || 'macos-15-intel' }}
+    runs-on: ${{ matrix.platform == 'arm64' && (vars.ARM64_MACOS_RUNNER || 'macos-latest') || fromJSON('{"intel":"macos-15-intel","linux-x86":"ubuntu-latest","linux-arm64":"ubuntu-24.04-arm"}')[matrix.platform] }}
     timeout-minutes: 330
     env:
       CELL: ${{ matrix.host }}-${{ matrix.platform }}
       # The bundle directory the steps use, and the reference cell for the OS.
-      BUNDLE: ${{ matrix.platform == 'linux' && 'lccl-bc' || 'ccl-bc' }}
-      BUNDLE_TARBALL: ${{ matrix.platform == 'linux' && 'lccl-bc.tar.gz' || 'ccl-bc.tar.gz' }}
-      REFERENCE: ${{ matrix.platform == 'linux' && 'sbcl-linux' || 'sbcl-intel' }}
+      BUNDLE: ${{ startsWith(matrix.platform, 'linux') && 'lccl-bc' || 'ccl-bc' }}
+      BUNDLE_TARBALL: ${{ startsWith(matrix.platform, 'linux') && 'lccl-bc.tar.gz' || 'ccl-bc.tar.gz' }}
+      REFERENCE: ${{ startsWith(matrix.platform, 'linux') && 'sbcl-linux-x86' || 'sbcl-intel' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -138,7 +138,7 @@ jobs:
             regression-*/
 
   # The bundle CCL rebuilds inside the VM mustn't depend on the host lisp or the machine.
-  # Without release_tag, the references are gen2.yml's generation 1s (sbcl-intel, sbcl-linux).
+  # Without release_tag, the references are gen2.yml's generation 1s (sbcl-intel, sbcl-linux-x86).
   compare:
     needs: vm
     if: ${{ !cancelled() && inputs.rebuild_hosts != '[]' }}
@@ -150,7 +150,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           pattern: gen1-*
-      - name: Every generation 1 must equal its OS's reference (sbcl-intel, sbcl-linux)
+      - name: Every generation 1 must equal its OS's reference (sbcl-intel, sbcl-linux-x86)
         env:
           HOSTS: ${{ inputs.hosts }}
           REBUILD_HOSTS: ${{ inputs.rebuild_hosts }}
@@ -161,8 +161,8 @@ jobs:
             [[ $REBUILD_HOSTS == *\"$h\"* ]] || continue
             for p in $(echo "$PLATFORMS" | tr -d '[]",'); do
               case $h-$p in
-                sbcl-intel|sbcl-linux) ;;
-                *-linux) linux+=("$h-$p=gen1-$h-$p/gen1.tar.gz") ;;
+                sbcl-intel|sbcl-linux-x86) ;;
+                *-linux-*) linux+=("$h-$p=gen1-$h-$p/gen1.tar.gz") ;;
                 *) macs+=("$h-$p=gen1-$h-$p/gen1.tar.gz") ;;
               esac
             done
@@ -172,7 +172,7 @@ jobs:
             ccl-vm/.github/ci/compare-bundles.sh "sbcl-intel=gen1-sbcl-intel/gen1.tar.gz" "${macs[@]}" || status=1
           fi
           if [[ $PLATFORMS == *linux* ]]; then
-            ccl-vm/.github/ci/compare-bundles.sh "sbcl-linux=gen1-sbcl-linux/gen1.tar.gz" "${linux[@]}" || status=1
+            ccl-vm/.github/ci/compare-bundles.sh "sbcl-linux-x86=gen1-sbcl-linux-x86/gen1.tar.gz" "${linux[@]}" || status=1
           fi
           exit $status
       - if: ${{ failure() }}

@@ -2,7 +2,8 @@
 # usage: [BUNDLE_TARBALL=FILE] install-hosts.sh [--bare] HOST...   (HOST is sbcl or ccl)
 # Installs the host lisps that ccl-vm runs on, plus Quicklisp with ccl-vm's dependencies, and
 # unpacks the bc bundle (FILE, default ccl-bc.tar.gz, downloaded by the workflow).
-# sbcl comes from Homebrew, on Linux too (GitHub's ubuntu images have it, off the PATH).
+# sbcl comes from Homebrew, on Linux too (GitHub's x86-64 ubuntu images have it, off the PATH;
+# it gets installed where missing).
 # --bare: only the lisps and an empty Quicklisp, as a new user has (no dependencies, no bundle).
 # For the ccl host, installs the released ccl 1.14 for this machine (Intel or Apple Silicon) in ./ccl-host/ and records its path in
 # CCL_HOST (for the later steps, via GITHUB_ENV).
@@ -17,6 +18,10 @@ CCL_HOST=$PWD/ccl-host/$CCL_KERNEL
 for host in "$@"; do
   case $host in
     sbcl)
+      if ! command -v brew > /dev/null && [ "$(uname -s)" = Linux ] && [ ! -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
+        # GitHub's arm64 ubuntu images have no Homebrew.
+        NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      fi
       if ! command -v brew > /dev/null && [ -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
         eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
         [ -n "${GITHUB_PATH:-}" ] && echo /home/linuxbrew/.linuxbrew/bin >> "$GITHUB_PATH"
