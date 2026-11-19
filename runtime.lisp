@@ -84,7 +84,7 @@
 
 
 ;;; ** TODO: do in lap for now so can move on, but need to figure out why it's so slow.
-#+CCL
+#+(and ccl darwin)
 (deflapfunction soname-from-mach-header (header)
   (setq header (%macptr-ptr header))
   (do* ((p (ccl::%inc-ptr header
@@ -98,7 +98,7 @@
        ((= i n))
     (when (= #$LC_ID_DYLIB (ccl::pref p :load_command.cmd))
       (return (ccl (ccl::%get-cstring (ccl::%inc-ptr p (ccl::record-length :dylib_command))))))))
-#-CCL
+#-(and ccl darwin)
 (deflapfunction soname-from-mach-header (header)
   (declare (ignore header))
   nil)
